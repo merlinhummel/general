@@ -87,6 +87,9 @@ class HammerTracker: ObservableObject {
     // Frame processing
     private let processingQueue = DispatchQueue(label: "com.hammertrack.processing", qos: .userInitiated)
     
+    // Video orientation detection
+    private var videoOrientation: CGImagePropertyOrientation = .up
+    
     init() {
         loadCoreMLModel()
     }
@@ -140,6 +143,24 @@ class HammerTracker: ObservableObject {
         guard let track = asset.tracks(withMediaType: .video).first else {
             completion(.failure(NSError(domain: "HammerTracker", code: 1, userInfo: [NSLocalizedDescriptionKey: "No video track found"])))
             return
+        }
+        
+        // Detect video orientation from transform
+        Task {
+            if let transform = try? await track.load(.preferredTransform) {
+                videoOrientation = orientationFromTransform(transform)
+                print("=== Video Orientation Debug ===")
+                print("Transform: a=\(transform.a), b=\(transform.b), c=\(transform.c), d=\(transform.d)")
+                print("Detected orientation: \(videoOrientation.rawValue)")
+                
+                // Also get the natural size to understand the video dimensions
+                if let naturalSize = try? await track.load(.naturalSize) {
+                    print("Natural size: \(naturalSize)")
+                    let transformedSize = naturalSize.applying(transform)
+                    print("Transformed size: \(transformedSize)")
+                    print("Is portrait: \(abs(transformedSize.width) < abs(transformedSize.height))")
+                }
+            }
         }
         
         let reader: AVAssetReader
@@ -239,22 +260,52 @@ class HammerTracker: ObservableObject {
             }
             
             // Find the best detection (highest confidence)
-            // Lower threshold to 0.3 for testing
-            if let bestDetection = results.first(where: { $0.confidence >= 0.3 }) {
-                var boundingBox = bestDetection.boundingBox
+            if let bestDetection = results.first(where: { $0.confidence >= self.confidenceThreshold }) {
+                let boundingBox = bestDetection.boundingBox
                 
-                // Fix for 90-degree rotation issue common with CoreML models
-                // Rotate the bounding box coordinates by 90 degrees clockwise
-                let rotatedBox = CGRect(
-                    x: 1.0 - boundingBox.maxY,
-                    y: boundingBox.minX,
-                    width: boundingBox.height,
-                    height: boundingBox.width
-                )
+                // TEMPORARY: Test different transformations to find the correct one
+                // We'll try multiple options and log them
+                if frameNumber % 30 == 0 {
+                    print("\n=== Testing Transformations Frame \(frameNumber) ===")
+                    print("Original box: \(boundingBox)")
+                    
+                    // Option 1: No transformation
+                    print("Option 1 (No transform): \(boundingBox)")
+                    
+                    // Option 2: 90° CW
+                    let box90CW = CGRect(
+                        x: boundingBox.minY,
+                        y: 1.0 - boundingBox.maxX,
+                        width: boundingBox.height,
+                        height: boundingBox.width
+                    )
+                    print("Option 2 (90° CW): \(box90CW)")
+                    
+                    // Option 3: 90° CCW
+                    let box90CCW = CGRect(
+                        x: 1.0 - boundingBox.maxY,
+                        y: boundingBox.minX,
+                        width: boundingBox.height,
+                        height: boundingBox.width
+                    )
+                    print("Option 3 (90° CCW): \(box90CCW)")
+                    
+                    // Option 4: 180°
+                    let box180 = CGRect(
+                        x: 1.0 - boundingBox.maxX,
+                        y: 1.0 - boundingBox.maxY,
+                        width: boundingBox.width,
+                        height: boundingBox.height
+                    )
+                    print("Option 4 (180°): \(box180)")
+                }
+                
+                // For now, let's try NO transformation to see if that fixes it
+                let transformedBox = boundingBox // No transformation
                 
                 let trackedFrame = TrackedFrame(
                     frameNumber: frameNumber,
-                    boundingBox: rotatedBox,
+                    boundingBox: transformedBox,
                     confidence: bestDetection.confidence,
                     timestamp: timestamp
                 )
@@ -262,18 +313,85 @@ class HammerTracker: ObservableObject {
                 self.trackedFrames.append(trackedFrame)
                 
                 if frameNumber % 30 == 0 {
-                    print("Tracked frame \(frameNumber) with confidence \(bestDetection.confidence)")
-                    print("Original box: \(boundingBox), Rotated box: \(rotatedBox)")
+                    print("Using: No transformation")
+                    print("Final box: \(transformedBox)")
                 }
             }
         }
         
+        // Use .up orientation to get raw coordinates without any transformation
         let handler = VNImageRequestHandler(cvPixelBuffer: imageBuffer, orientation: .up, options: [:])
         do {
             try handler.perform([request])
         } catch {
             print("Failed to perform detection: \(error)")
         }
+    }
+    
+    // MARK: - Coordinate Transformation
+    private func transformBoundingBox(_ box: CGRect, orientation: CGImagePropertyOrientation) -> CGRect {
+        // VNRecognizedObjectObservation provides normalized coordinates (0-1)
+        // For iOS videos in portrait mode, we typically need to handle rotation
+        
+        switch orientation {
+        case .up, .upMirrored:
+            // Normal orientation - no transformation needed
+            return box
+            
+        case .down, .downMirrored:
+            // Rotated 180 degrees
+            return CGRect(
+                x: 1.0 - box.maxX,
+                y: 1.0 - box.maxY,
+                width: box.width,
+                height: box.height
+            )
+            
+        case .left, .leftMirrored:
+            // Rotated 90 degrees CCW (common for portrait videos on iOS)
+            // This is typically what we get for portrait videos
+            return CGRect(
+                x: 1.0 - box.maxY,
+                y: box.minX,
+                width: box.height,
+                height: box.width
+            )
+            
+        case .right, .rightMirrored:
+            // Rotated 90 degrees CW (common for portrait videos recorded differently)
+            return CGRect(
+                x: box.minY,
+                y: 1.0 - box.maxX,
+                width: box.height,
+                height: box.width
+            )
+        }
+    }
+    
+    private func orientationFromTransform(_ transform: CGAffineTransform) -> CGImagePropertyOrientation {
+        var assetOrientation = CGImagePropertyOrientation.up
+        
+        // Check the transform values to determine orientation
+        // For iOS videos, portrait mode typically has specific transform values
+        
+        if transform.a == 0 && transform.b == 1.0 && transform.c == -1.0 && transform.d == 0 {
+            assetOrientation = .right  // 90 CW - typical for iOS portrait video
+            print("Detected: 90° CW rotation (typical iOS portrait)")
+        } else if transform.a == 0 && transform.b == -1.0 && transform.c == 1.0 && transform.d == 0 {
+            assetOrientation = .left   // 90 CCW
+            print("Detected: 90° CCW rotation")
+        } else if transform.a == 1.0 && transform.b == 0 && transform.c == 0 && transform.d == 1.0 {
+            assetOrientation = .up     // No rotation (landscape)
+            print("Detected: No rotation (landscape)")
+        } else if transform.a == -1.0 && transform.b == 0 && transform.c == 0 && transform.d == -1.0 {
+            assetOrientation = .down   // 180 rotation
+            print("Detected: 180° rotation")
+        } else {
+            // For any other transform, try to guess based on the values
+            print("Unusual transform detected, using default")
+        }
+        
+        return assetOrientation
     }
     
     // MARK: - Trajectory Analysis
@@ -446,10 +564,10 @@ class HammerTracker: ObservableObject {
         guard let trajectory = currentTrajectory else { return [] }
         
         return trajectory.smoothedPoints.map { point in
-            // Convert from normalized coordinates (0-1) to display coordinates
+            // Direct conversion - coordinates are already normalized (0-1)
             CGPoint(
                 x: point.x * displaySize.width,
-                y: (1.0 - point.y) * displaySize.height // Flip Y coordinate
+                y: point.y * displaySize.height
             )
         }
     }

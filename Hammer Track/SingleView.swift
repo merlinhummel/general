@@ -18,22 +18,41 @@ struct SingleView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            // Minimal header
+            // Header with back button
             HStack {
-                Text("Single View")
-                    .font(.caption)
-                    .foregroundColor(.gray)
-                Spacer()
-                if player == nil {
-                    Button("Video auswählen") {
-                        showingVideoPicker = true
+                if player != nil {
+                    Button(action: {
+                        // Reset player and go back
+                        player = nil
+                        selectedVideoURL = nil
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 14, weight: .semibold))
+                            Text("Zurück")
+                                .font(.system(size: 14))
+                        }
+                        .foregroundColor(.blue)
                     }
-                    .font(.caption2)
-                    .foregroundColor(.blue)
+                } else {
+                    Color.clear
+                        .frame(width: 60, height: 20)
                 }
+                
+                Spacer()
+                
+                Text("Single View")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(.primary)
+                
+                Spacer()
+                
+                // Placeholder for balance
+                Color.clear
+                    .frame(width: 60, height: 20)
             }
             .padding(.horizontal)
-            .padding(.vertical, 4)
+            .padding(.vertical, 8)
             .background(Color(.systemGray6))
             
             if let player = player {
@@ -72,24 +91,22 @@ struct SingleView: View {
                         .cornerRadius(15)
                     }
                     
-                    // Trajectory toggle
+                    // Small trajectory toggle in bottom right of video
                     VStack {
+                        Spacer()
                         HStack {
                             Spacer()
                             Button(action: { showTrajectory.toggle() }) {
-                                HStack {
-                                    Image(systemName: showTrajectory ? "eye" : "eye.slash")
-                                    Text("Trajektorie")
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .background(Color.black.opacity(0.6))
-                                .foregroundColor(.white)
-                                .cornerRadius(20)
+                                Image(systemName: showTrajectory ? "eye" : "eye.slash")
+                                    .font(.system(size: 16))
+                                    .foregroundColor(.white)
+                                    .frame(width: 36, height: 36)
+                                    .background(Color.black.opacity(0.5))
+                                    .clipShape(Circle())
                             }
-                            .padding()
+                            .padding(.trailing, 12)
+                            .padding(.bottom, 12)
                         }
-                        Spacer()
                     }
                 }
                 

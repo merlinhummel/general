@@ -22,6 +22,9 @@ struct ZoomableVideoView: UIViewRepresentable {
         scrollView.bouncesZoom = true
         scrollView.showsHorizontalScrollIndicator = false
         scrollView.showsVerticalScrollIndicator = false
+        scrollView.isScrollEnabled = true  // Enable scrolling
+        scrollView.alwaysBounceVertical = true
+        scrollView.alwaysBounceHorizontal = true
         containerView.addSubview(scrollView)
         
         // Video container view (what we zoom)
@@ -201,7 +204,7 @@ struct ZoomableVideoView: UIViewRepresentable {
             let smoothedPoints = trajectory.smoothedPoints
             
             for (index, point) in smoothedPoints.enumerated() {
-                // Convert normalized coordinates (0-1) to video frame coordinates
+                // Direct mapping - trust the normalized coordinates
                 let displayPoint = CGPoint(
                     x: videoRect.origin.x + (point.x * videoRect.width),
                     y: videoRect.origin.y + (point.y * videoRect.height)
@@ -228,19 +231,25 @@ struct ZoomableVideoView: UIViewRepresentable {
             
             trajectoryLayer.path = path.cgPath
             
-            // Update current position indicator
-            if let currentFrame = trajectory.frames.first(where: { abs($0.timestamp - currentTime) < 0.05 }) {
+            // Update current position indicator - find closest frame with better tolerance
+            let currentFrame = trajectory.frames.min { frame1, frame2 in
+                abs(frame1.timestamp - currentTime) < abs(frame2.timestamp - currentTime)
+            }
+            
+            if let frame = currentFrame, abs(frame.timestamp - currentTime) < 0.1 {
+                // Use exactly the same coordinate transformation as trajectory
                 let currentPoint = CGPoint(
-                    x: videoRect.origin.x + (currentFrame.boundingBox.midX * videoRect.width),
-                    y: videoRect.origin.y + (currentFrame.boundingBox.midY * videoRect.height)
+                    x: videoRect.origin.x + (frame.boundingBox.midX * videoRect.width),
+                    y: videoRect.origin.y + (frame.boundingBox.midY * videoRect.height)
                 )
                 
                 let scale = scrollView?.zoomScale ?? 1.0
                 let radius = 8.0 / scale
                 let circlePath = UIBezierPath(arcCenter: currentPoint, radius: radius, startAngle: 0, endAngle: .pi * 2, clockwise: true)
                 currentPositionLayer.path = circlePath.cgPath
+                currentPositionLayer.isHidden = false
             } else {
-                currentPositionLayer.path = nil
+                currentPositionLayer.isHidden = true
             }
         }
     }

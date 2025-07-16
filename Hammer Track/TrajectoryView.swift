@@ -97,7 +97,7 @@ struct TrajectoryVideoContainer: UIViewRepresentable {
             let smoothedFrames = trajectory.smoothedPoints
             
             for (index, point) in smoothedFrames.enumerated() {
-                // Convert normalized coordinates (0-1) to video frame coordinates
+                // Direct mapping - trust the normalized coordinates
                 let displayPoint = CGPoint(
                     x: videoRect.origin.x + (point.x * videoRect.width),
                     y: videoRect.origin.y + (point.y * videoRect.height)
@@ -126,17 +126,24 @@ struct TrajectoryVideoContainer: UIViewRepresentable {
             
             trajectoryLayer.path = path.cgPath
             
-            // Update current position indicator (yellow dot)
-            if let currentFrame = trajectory.frames.first(where: { abs($0.timestamp - currentTime) < 0.05 }) {
+            // Update current position indicator (yellow dot) - find closest frame
+            // Using a more robust search with tolerance
+            let currentFrame = trajectory.frames.min { frame1, frame2 in
+                abs(frame1.timestamp - currentTime) < abs(frame2.timestamp - currentTime)
+            }
+            
+            if let frame = currentFrame, abs(frame.timestamp - currentTime) < 0.1 {
+                // Use exactly the same coordinate transformation as trajectory
                 let currentPoint = CGPoint(
-                    x: videoRect.origin.x + (currentFrame.boundingBox.midX * videoRect.width),
-                    y: videoRect.origin.y + (currentFrame.boundingBox.midY * videoRect.height)
+                    x: videoRect.origin.x + (frame.boundingBox.midX * videoRect.width),
+                    y: videoRect.origin.y + (frame.boundingBox.midY * videoRect.height)
                 )
                 
                 let circlePath = UIBezierPath(arcCenter: currentPoint, radius: 8, startAngle: 0, endAngle: .pi * 2, clockwise: true)
                 currentPositionLayer.path = circlePath.cgPath
+                currentPositionLayer.isHidden = false
             } else {
-                currentPositionLayer.path = nil
+                currentPositionLayer.isHidden = true
             }
         }
     }
