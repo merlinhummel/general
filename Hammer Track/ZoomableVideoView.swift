@@ -22,48 +22,55 @@ struct ZoomableVideoView: UIViewRepresentable {
         scrollView.bouncesZoom = true
         scrollView.showsHorizontalScrollIndicator = false
         scrollView.showsVerticalScrollIndicator = false
-        scrollView.isScrollEnabled = true  // Enable scrolling
+        scrollView.isScrollEnabled = true
         scrollView.alwaysBounceVertical = true
         scrollView.alwaysBounceHorizontal = true
         containerView.addSubview(scrollView)
         
         // Video container view (what we zoom)
         let videoContainerView = UIView()
-        scrollView.addSubview(videoContainerView)
-        
-        // Setup video layer
+        scrollView.addSubview(videoContainerView)        
+        // Setup video layer with aspect fill to fill the container
         let playerLayer = AVPlayerLayer(player: player)
-        playerLayer.videoGravity = .resizeAspect
+        playerLayer.videoGravity = .resizeAspectFill // Changed to fill the container
         videoContainerView.layer.addSublayer(playerLayer)
         
-        // Setup trajectory layer
+        // Setup trajectory layer with improved styling
         let trajectoryLayer = CAShapeLayer()
         trajectoryLayer.strokeColor = UIColor.white.cgColor
         trajectoryLayer.fillColor = UIColor.clear.cgColor
         trajectoryLayer.lineWidth = 3.0
         trajectoryLayer.lineCap = .round
         trajectoryLayer.lineJoin = .round
+        
+        // Add shadow for better visibility
+        trajectoryLayer.shadowColor = UIColor.black.cgColor
+        trajectoryLayer.shadowOpacity = 0.5
+        trajectoryLayer.shadowOffset = CGSize(width: 0, height: 0)
+        trajectoryLayer.shadowRadius = 2.0
         videoContainerView.layer.addSublayer(trajectoryLayer)
         
-        // Current position indicator
+        // Current position indicator with improved styling
         let currentPositionLayer = CAShapeLayer()
         currentPositionLayer.fillColor = UIColor.yellow.cgColor
         currentPositionLayer.strokeColor = UIColor.orange.cgColor
         currentPositionLayer.lineWidth = 2.0
-        videoContainerView.layer.addSublayer(currentPositionLayer)
         
+        // Add shadow for better visibility
+        currentPositionLayer.shadowColor = UIColor.black.cgColor
+        currentPositionLayer.shadowOpacity = 0.5
+        currentPositionLayer.shadowOffset = CGSize(width: 0, height: 0)
+        currentPositionLayer.shadowRadius = 2.0
+        videoContainerView.layer.addSublayer(currentPositionLayer)        
         // Store references
+        context.coordinator.containerView = containerView
         context.coordinator.scrollView = scrollView
         context.coordinator.videoContainerView = videoContainerView
         context.coordinator.playerLayer = playerLayer
         context.coordinator.trajectoryLayer = trajectoryLayer
         context.coordinator.currentPositionLayer = currentPositionLayer
         
-        // Add pinch gesture for zooming
-        let pinchGesture = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePinch(_:)))
-        scrollView.addGestureRecognizer(pinchGesture)
-        
-        // Add double tap gesture for quick zoom
+        // Add double tap gesture for reset zoom
         let doubleTapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleDoubleTap(_:)))
         doubleTapGesture.numberOfTapsRequired = 2
         scrollView.addGestureRecognizer(doubleTapGesture)
@@ -72,118 +79,98 @@ struct ZoomableVideoView: UIViewRepresentable {
     }
     
     func updateUIView(_ uiView: UIView, context: Context) {
-        context.coordinator.showTrajectory = showTrajectory
-        context.coordinator.updateTrajectory(trajectory, currentTime: currentTime, showFullTrajectory: showFullTrajectory)
+        if showTrajectory {
+            context.coordinator.updateTrajectory(trajectory, currentTime: currentTime, showFullTrajectory: showFullTrajectory)
+        } else {
+            context.coordinator.trajectoryLayer?.path = nil
+            context.coordinator.currentPositionLayer?.isHidden = true
+        }
         
-        // Only update layout if bounds have changed
-        if context.coordinator.lastBounds != uiView.bounds {
-            context.coordinator.lastBounds = uiView.bounds
-            DispatchQueue.main.async {
-                context.coordinator.updateLayout(in: uiView.bounds)
-            }
+        DispatchQueue.main.async {
+            context.coordinator.updateLayout()
         }
     }
     
     func makeCoordinator() -> Coordinator {
         Coordinator()
-    }
-    
+    }    
+    // MARK: - Coordinator
     class Coordinator: NSObject, UIScrollViewDelegate {
+        weak var containerView: UIView?
         weak var scrollView: UIScrollView?
         weak var videoContainerView: UIView?
         weak var playerLayer: AVPlayerLayer?
         weak var trajectoryLayer: CAShapeLayer?
         weak var currentPositionLayer: CAShapeLayer?
-        var showTrajectory = true
-        var lastBounds: CGRect = .zero
         
-        func updateLayout(in bounds: CGRect) {
-            guard let scrollView = scrollView,
+        func updateLayout() {
+            guard let containerView = containerView,
+                  let scrollView = scrollView,
                   let videoContainerView = videoContainerView,
-                  let playerLayer = playerLayer else { return }
+                  let playerLayer = playerLayer,
+                  let trajectoryLayer = trajectoryLayer,
+                  let currentPositionLayer = currentPositionLayer else { return }
             
-            // Save current zoom scale and content offset
-            let currentZoomScale = scrollView.zoomScale
-            let wasZoomed = currentZoomScale > scrollView.minimumZoomScale
-            let contentOffset = scrollView.contentOffset
-            
-            // Update scroll view frame
+            let bounds = containerView.bounds
             scrollView.frame = bounds
             
-            // Update video container to match scroll view size initially
-            if !wasZoomed {
-                videoContainerView.frame = CGRect(origin: .zero, size: bounds.size)
+            // Calculate video container size to fit the video
+            var videoSize = playerLayer.player?.currentItem?.presentationSize ?? CGSize(width: 1920, height: 1080)
+            // Ensure positive dimensions
+            videoSize.width = abs(videoSize.width)
+            videoSize.height = abs(videoSize.height)
+            
+            guard videoSize.width > 0 && videoSize.height > 0 else {
+                // Fallback if video size is invalid
+                videoSize = CGSize(width: 1920, height: 1080)
+                return
             }
             
-            // Update player layer
-            playerLayer.frame = videoContainerView.bounds
+            // For aspect fill, we need to calculate the scaling differently
+            let containerAspect = bounds.width / bounds.height
+            let videoAspect = videoSize.width / videoSize.height
             
-            // Update scroll view content size
-            scrollView.contentSize = videoContainerView.frame.size
-            
-            // Update trajectory layer frame
-            trajectoryLayer?.frame = videoContainerView.bounds
-            currentPositionLayer?.frame = videoContainerView.bounds
-            
-            // Restore zoom and offset if needed
-            if wasZoomed {
-                scrollView.zoomScale = currentZoomScale
-                scrollView.contentOffset = contentOffset
-            }
-        }
-        
-        @objc func handlePinch(_ gesture: UIPinchGestureRecognizer) {
-            guard let scrollView = scrollView else { return }
-            
-            if gesture.state == .began || gesture.state == .changed {
-                let currentScale = scrollView.zoomScale
-                let newScale = currentScale * gesture.scale
-                let boundedScale = min(max(newScale, scrollView.minimumZoomScale), scrollView.maximumZoomScale)
-                scrollView.zoomScale = boundedScale
-                gesture.scale = 1.0
-            }
-        }
-        
-        @objc func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
-            guard let scrollView = scrollView else { return }
-            
-            if scrollView.zoomScale > scrollView.minimumZoomScale {
-                scrollView.setZoomScale(scrollView.minimumZoomScale, animated: true)
+            var scale: CGFloat = 1.0
+            if containerAspect > videoAspect {
+                // Container is wider than video - scale based on width
+                scale = bounds.width / videoSize.width
             } else {
-                let location = gesture.location(in: scrollView)
-                let rect = CGRect(x: location.x - 50, y: location.y - 50, width: 100, height: 100)
-                scrollView.zoom(to: rect, animated: true)
+                // Container is taller than video - scale based on height
+                scale = bounds.height / videoSize.height
             }
-        }
-        
-        // UIScrollViewDelegate
-        func viewForZooming(in scrollView: UIScrollView) -> UIView? {
-            return videoContainerView
-        }
-        
-        func scrollViewDidZoom(_ scrollView: UIScrollView) {
-            guard let videoContainerView = videoContainerView else { return }
             
-            // Center the video view when it's smaller than scroll view
-            let offsetX = max((scrollView.bounds.width - scrollView.contentSize.width) * 0.5, 0)
-            let offsetY = max((scrollView.bounds.height - scrollView.contentSize.height) * 0.5, 0)
-            videoContainerView.center = CGPoint(
-                x: scrollView.contentSize.width * 0.5 + offsetX,
-                y: scrollView.contentSize.height * 0.5 + offsetY
+            let scaledSize = CGSize(width: videoSize.width * scale, height: videoSize.height * scale)
+            let videoRect = CGRect(
+                x: (bounds.width - scaledSize.width) / 2,
+                y: (bounds.height - scaledSize.height) / 2,
+                width: scaledSize.width,
+                height: scaledSize.height
             )
             
-            // Update trajectory line width based on zoom
-            let scale = scrollView.zoomScale
-            trajectoryLayer?.lineWidth = 3.0 / scale
-            currentPositionLayer?.lineWidth = 2.0 / scale
+            videoContainerView.frame = videoRect
+            scrollView.contentSize = videoRect.size
+            
+            // Update layers
+            playerLayer.frame = videoContainerView.bounds
+            trajectoryLayer.frame = videoContainerView.bounds
+            currentPositionLayer.frame = videoContainerView.bounds
+            
+            // Center the content if it's smaller than scroll view
+            centerContent()
+        }        
+        func centerContent() {
+            guard let scrollView = scrollView else { return }
+            
+            let offsetX = max((scrollView.bounds.width - scrollView.contentSize.width) * 0.5, 0)
+            let offsetY = max((scrollView.bounds.height - scrollView.contentSize.height) * 0.5, 0)
+            scrollView.contentInset = UIEdgeInsets(top: offsetY, left: offsetX, bottom: offsetY, right: offsetX)
         }
         
         func updateTrajectory(_ trajectory: Trajectory?, currentTime: Double, showFullTrajectory: Bool) {
             guard let trajectory = trajectory,
                   let trajectoryLayer = trajectoryLayer,
                   let currentPositionLayer = currentPositionLayer,
-                  let videoContainerView = videoContainerView,
-                  showTrajectory else {
+                  let videoContainerView = videoContainerView else {
                 trajectoryLayer?.path = nil
                 currentPositionLayer?.path = nil
                 return
@@ -192,23 +179,50 @@ struct ZoomableVideoView: UIViewRepresentable {
             let bounds = videoContainerView.bounds
             guard bounds.width > 0 && bounds.height > 0 else { return }
             
-            // Get the actual video frame within the container (considering aspect ratio)
+            // Get the actual video frame within the container
             guard let playerLayer = playerLayer else { return }
             let videoRect = playerLayer.videoRect
             
-            // Create trajectory path using smoothed points
+            // If video rect is invalid, use the entire bounds
+            let drawRect = (videoRect.width > 0 && videoRect.height > 0 && 
+                           !videoRect.width.isNaN && !videoRect.height.isNaN) ? videoRect : bounds
+            
+            // Draw trajectory using the same logic as TrajectoryView
+            drawTrajectory(in: drawRect, trajectory: trajectory, currentTime: currentTime, showFullTrajectory: showFullTrajectory)
+        }        
+        private func drawTrajectory(in videoRect: CGRect, trajectory: Trajectory, currentTime: Double, showFullTrajectory: Bool) {
+            guard let trajectoryLayer = trajectoryLayer,
+                  let currentPositionLayer = currentPositionLayer else { return }
+            
+            // Create trajectory path
             let path = UIBezierPath()
             var hasStarted = false
             
-            // Use smoothed points from trajectory
+            // Use lightly smoothed points from trajectory
             let smoothedPoints = trajectory.smoothedPoints
             
+            // Ensure we have valid frames
+            guard !smoothedPoints.isEmpty && trajectory.frames.count == smoothedPoints.count else {
+                trajectoryLayer.path = nil
+                currentPositionLayer.path = nil
+                return
+            }
+            
             for (index, point) in smoothedPoints.enumerated() {
-                // Direct mapping - trust the normalized coordinates
+                // Validate point before using
+                guard !point.x.isNaN && !point.y.isNaN && 
+                      point.x.isFinite && point.y.isFinite else { continue }
+                
+                // Transform normalized coordinates (0-1) to display coordinates
+                // Flip Y-axis: when object is at top in video, show at top in trajectory
                 let displayPoint = CGPoint(
                     x: videoRect.origin.x + (point.x * videoRect.width),
-                    y: videoRect.origin.y + (point.y * videoRect.height)
+                    y: videoRect.origin.y + ((1.0 - point.y) * videoRect.height)  // Flip Y
                 )
+                
+                // Validate display point
+                guard !displayPoint.x.isNaN && !displayPoint.y.isNaN &&
+                      displayPoint.x.isFinite && displayPoint.y.isFinite else { continue }
                 
                 if showFullTrajectory {
                     if !hasStarted {
@@ -217,7 +231,8 @@ struct ZoomableVideoView: UIViewRepresentable {
                     } else {
                         path.addLine(to: displayPoint)
                     }
-                } else {
+                }                else {
+                    // Show trajectory up to current time
                     if index < trajectory.frames.count && trajectory.frames[index].timestamp <= currentTime {
                         if !hasStarted {
                             path.move(to: displayPoint)
@@ -231,25 +246,64 @@ struct ZoomableVideoView: UIViewRepresentable {
             
             trajectoryLayer.path = path.cgPath
             
-            // Update current position indicator - find closest frame with better tolerance
-            let currentFrame = trajectory.frames.min { frame1, frame2 in
-                abs(frame1.timestamp - currentTime) < abs(frame2.timestamp - currentTime)
+            // Update current position indicator
+            let currentFrame = trajectory.frames.enumerated().min { frame1, frame2 in
+                abs(frame1.element.timestamp - currentTime) < abs(frame2.element.timestamp - currentTime)
             }
             
-            if let frame = currentFrame, abs(frame.timestamp - currentTime) < 0.1 {
-                // Use exactly the same coordinate transformation as trajectory
-                let currentPoint = CGPoint(
-                    x: videoRect.origin.x + (frame.boundingBox.midX * videoRect.width),
-                    y: videoRect.origin.y + (frame.boundingBox.midY * videoRect.height)
-                )
-                
-                let scale = scrollView?.zoomScale ?? 1.0
-                let radius = 8.0 / scale
-                let circlePath = UIBezierPath(arcCenter: currentPoint, radius: radius, startAngle: 0, endAngle: .pi * 2, clockwise: true)
-                currentPositionLayer.path = circlePath.cgPath
-                currentPositionLayer.isHidden = false
+            if let (index, frame) = currentFrame, abs(frame.timestamp - currentTime) < 0.1 {
+                // Use the smoothed point for the current position
+                if index < smoothedPoints.count {
+                    let smoothedPoint = smoothedPoints[index]
+                    
+                    // Validate point
+                    guard !smoothedPoint.x.isNaN && !smoothedPoint.y.isNaN &&
+                          smoothedPoint.x.isFinite && smoothedPoint.y.isFinite else {
+                        currentPositionLayer.isHidden = true
+                        return
+                    }
+                    
+                    let currentPoint = CGPoint(
+                        x: videoRect.origin.x + (smoothedPoint.x * videoRect.width),
+                        y: videoRect.origin.y + ((1.0 - smoothedPoint.y) * videoRect.height)  // Flip Y
+                    )
+                    
+                    // Validate current point
+                    guard !currentPoint.x.isNaN && !currentPoint.y.isNaN &&
+                          currentPoint.x.isFinite && currentPoint.y.isFinite else {
+                        currentPositionLayer.isHidden = true
+                        return
+                    }
+                    
+                    let circlePath = UIBezierPath(arcCenter: currentPoint, radius: 8, startAngle: 0, endAngle: .pi * 2, clockwise: true)
+                    currentPositionLayer.path = circlePath.cgPath
+                    currentPositionLayer.isHidden = false
+                } else {
+                    currentPositionLayer.isHidden = true
+                }
             } else {
                 currentPositionLayer.isHidden = true
+            }
+        }        
+        // MARK: - UIScrollViewDelegate
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? {
+            return videoContainerView
+        }
+        
+        func scrollViewDidZoom(_ scrollView: UIScrollView) {
+            centerContent()
+        }
+        
+        // MARK: - Gesture Handlers
+        @objc func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
+            guard let scrollView = scrollView else { return }
+            
+            if scrollView.zoomScale > scrollView.minimumZoomScale {
+                scrollView.setZoomScale(scrollView.minimumZoomScale, animated: true)
+            } else {
+                let location = gesture.location(in: videoContainerView)
+                let rect = CGRect(x: location.x - 50, y: location.y - 50, width: 100, height: 100)
+                scrollView.zoom(to: rect, animated: true)
             }
         }
     }

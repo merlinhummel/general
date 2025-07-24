@@ -173,7 +173,9 @@ struct SingleView: View {
                 if let track = asset.tracks(withMediaType: .video).first {
                     let size = try await track.load(.naturalSize)
                     let transform = try await track.load(.preferredTransform)
-                    self.videoSize = size.applying(transform)
+                    let transformedSize = size.applying(transform)
+                    // Use absolute values to ensure positive dimensions
+                    self.videoSize = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
                 }
             } catch {
                 print("Error loading duration: \(error)")

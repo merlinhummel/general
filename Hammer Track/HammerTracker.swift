@@ -15,6 +15,14 @@ struct TrackedFrame {
 
 struct Trajectory {
     let frames: [TrackedFrame]
+    let videoOrientation: CGImagePropertyOrientation
+    let videoSize: CGSize // Actual display size after transformation
+    
+    init(frames: [TrackedFrame], videoOrientation: CGImagePropertyOrientation = .up, videoSize: CGSize = .zero) {
+        self.frames = frames
+        self.videoOrientation = videoOrientation
+        self.videoSize = videoSize
+    }
     
     var points: [CGPoint] {
         return frames.map { frame in
@@ -22,28 +30,58 @@ struct Trajectory {
         }
     }
     
-    // Smoothed points using simple moving average
+    // Improved smoothing using Savitzky-Golay filter or Gaussian smoothing
     var smoothedPoints: [CGPoint] {
-        guard points.count > 3 else { return points }
+        guard points.count > 5 else { return points }
         
+        // Use Gaussian smoothing for better results with minimal change
+        return gaussianSmooth(points: points, sigma: 0.5)  // Reduced from 1.5 to 0.5 for light smoothing
+    }
+    
+    // Gaussian smoothing implementation
+    private func gaussianSmooth(points: [CGPoint], sigma: Double) -> [CGPoint] {
+        let windowSize = Int(ceil(sigma * 3)) * 2 + 1
         var smoothed: [CGPoint] = []
-        let windowSize = 5
         
+        // Create Gaussian kernel
+        var kernel: [Double] = []
+        let center = windowSize / 2
+        var sum = 0.0
+        
+        for i in 0..<windowSize {
+            let x = Double(i - center)
+            let weight = exp(-(x * x) / (2 * sigma * sigma))
+            kernel.append(weight)
+            sum += weight
+        }
+        
+        // Normalize kernel
+        kernel = kernel.map { $0 / sum }
+        
+        // Apply convolution
         for i in 0..<points.count {
-            let startIdx = max(0, i - windowSize / 2)
-            let endIdx = min(points.count - 1, i + windowSize / 2)
+            var weightedX = 0.0
+            var weightedY = 0.0
+            var totalWeight = 0.0
             
-            var sumX: CGFloat = 0
-            var sumY: CGFloat = 0
-            var count = 0
-            
-            for j in startIdx...endIdx {
-                sumX += points[j].x
-                sumY += points[j].y
-                count += 1
+            for j in 0..<windowSize {
+                let idx = i + j - center
+                if idx >= 0 && idx < points.count {
+                    let weight = kernel[j]
+                    weightedX += Double(points[idx].x) * weight
+                    weightedY += Double(points[idx].y) * weight
+                    totalWeight += weight
+                }
             }
             
-            smoothed.append(CGPoint(x: sumX / CGFloat(count), y: sumY / CGFloat(count)))
+            if totalWeight > 0 {
+                smoothed.append(CGPoint(
+                    x: CGFloat(weightedX / totalWeight),
+                    y: CGFloat(weightedY / totalWeight)
+                ))
+            } else {
+                smoothed.append(points[i])
+            }
         }
         
         return smoothed
@@ -53,13 +91,13 @@ struct Trajectory {
 struct TurningPoint {
     let frameIndex: Int
     let point: CGPoint
-    let isMaximum: Bool // true if it's a maximum (rightmost), false if minimum (leftmost)
+    let isMaximum: Bool
 }
 
 struct Ellipse {
     let startPoint: TurningPoint
     let endPoint: TurningPoint
-    let angle: Double // in degrees, positive = tilted right, negative = tilted left
+    let angle: Double
     let frames: [TrackedFrame]
 }
 
@@ -68,7 +106,6 @@ struct TrajectoryAnalysis {
     let totalFrames: Int
     let averageAngle: Double
 }
-
 // MARK: - HammerTracker Class
 class HammerTracker: ObservableObject {
     // Published properties for UI updates
@@ -82,13 +119,16 @@ class HammerTracker: ObservableObject {
     
     // Tracking data
     private var trackedFrames: [TrackedFrame] = []
-    private let confidenceThreshold: Float = 0.3 // Lowered for testing
+    private let confidenceThreshold: Float = 0.3
     
     // Frame processing
     private let processingQueue = DispatchQueue(label: "com.hammertrack.processing", qos: .userInitiated)
     
-    // Video orientation detection
+    // Video properties
     private var videoOrientation: CGImagePropertyOrientation = .up
+    private var videoNaturalSize: CGSize = .zero
+    private var videoDisplaySize: CGSize = .zero
+    private var videoTransform: CGAffineTransform = .identity
     
     init() {
         loadCoreMLModel()
@@ -101,7 +141,10 @@ class HammerTracker: ObservableObject {
             // If not found as mlpackage, try mlmodelc
             if let compiledModelURL = Bundle.main.url(forResource: "best", withExtension: "mlmodelc") {
                 do {
-                    let model = try MLModel(contentsOf: compiledModelURL)
+                    let config = MLModelConfiguration()
+                    config.computeUnits = .cpuAndGPU
+                    
+                    let model = try MLModel(contentsOf: compiledModelURL, configuration: config)
                     detectionModel = try VNCoreMLModel(for: model)
                     print("CoreML compiled model loaded successfully from: \(compiledModelURL)")
                     return
@@ -110,28 +153,20 @@ class HammerTracker: ObservableObject {
                 }
             }
             print("Failed to find model file. Searched for 'best.mlpackage' and 'best.mlmodelc'")
-            
-            // Debug: Print bundle contents
-            if let resourcePath = Bundle.main.resourcePath {
-                do {
-                    let contents = try FileManager.default.contentsOfDirectory(atPath: resourcePath)
-                    print("Bundle contents: \(contents.filter { $0.contains("best") || $0.contains(".ml") })")
-                } catch {
-                    print("Failed to list bundle contents: \(error)")
-                }
-            }
             return
         }
         
         do {
-            let model = try MLModel(contentsOf: modelURL)
+            let config = MLModelConfiguration()
+            config.computeUnits = .cpuAndGPU
+            
+            let model = try MLModel(contentsOf: modelURL, configuration: config)
             detectionModel = try VNCoreMLModel(for: model)
             print("CoreML model loaded successfully from: \(modelURL)")
         } catch {
             print("Failed to load CoreML model: \(error)")
         }
-    }
-    
+    }    
     // MARK: - Video Processing
     func processVideo(url: URL, completion: @escaping (Result<Trajectory, Error>) -> Void) {
         resetTracking()
@@ -145,21 +180,28 @@ class HammerTracker: ObservableObject {
             return
         }
         
-        // Detect video orientation from transform
+        // Detect video orientation and size
         Task {
-            if let transform = try? await track.load(.preferredTransform) {
-                videoOrientation = orientationFromTransform(transform)
-                print("=== Video Orientation Debug ===")
-                print("Transform: a=\(transform.a), b=\(transform.b), c=\(transform.c), d=\(transform.d)")
-                print("Detected orientation: \(videoOrientation.rawValue)")
+            do {
+                let transform = try await track.load(.preferredTransform)
+                let naturalSize = try await track.load(.naturalSize)
                 
-                // Also get the natural size to understand the video dimensions
-                if let naturalSize = try? await track.load(.naturalSize) {
-                    print("Natural size: \(naturalSize)")
-                    let transformedSize = naturalSize.applying(transform)
-                    print("Transformed size: \(transformedSize)")
-                    print("Is portrait: \(abs(transformedSize.width) < abs(transformedSize.height))")
-                }
+                self.videoTransform = transform
+                self.videoNaturalSize = naturalSize
+                self.videoOrientation = orientationFromTransform(transform, naturalSize: naturalSize)
+                
+                // Calculate the actual display size after transformation
+                let transformedSize = naturalSize.applying(transform)
+                self.videoDisplaySize = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
+                
+                print("=== Video Properties ===")
+                print("Natural size: \(naturalSize)")
+                print("Transform: a=\(transform.a), b=\(transform.b), c=\(transform.c), d=\(transform.d)")
+                print("Detected orientation: \(self.videoOrientation.rawValue)")
+                print("Display size: \(self.videoDisplaySize)")
+                print("Is portrait: \(self.videoDisplaySize.width < self.videoDisplaySize.height)")
+            } catch {
+                print("Error loading video properties: \(error)")
             }
         }
         
@@ -183,7 +225,6 @@ class HammerTracker: ObservableObject {
             guard let self = self else { return }
             
             var frameNumber = 0
-            let frameRate = track.nominalFrameRate
             
             while reader.status == .reading {
                 autoreleasepool {
@@ -207,7 +248,13 @@ class HammerTracker: ObservableObject {
             // Processing complete
             DispatchQueue.main.async {
                 self.isProcessing = false
-                self.currentTrajectory = Trajectory(frames: self.trackedFrames)
+                
+                // Create trajectory with orientation information
+                self.currentTrajectory = Trajectory(
+                    frames: self.trackedFrames,
+                    videoOrientation: self.videoOrientation,
+                    videoSize: self.videoDisplaySize
+                )
                 
                 if self.trackedFrames.isEmpty {
                     completion(.failure(NSError(domain: "HammerTracker", code: 2, userInfo: [NSLocalizedDescriptionKey: "No hammer detected in video"])))
@@ -216,8 +263,7 @@ class HammerTracker: ObservableObject {
                 }
             }
         }
-    }
-    
+    }    
     // MARK: - Live Camera Processing
     func processLiveFrame(_ imageBuffer: CVImageBuffer, frameNumber: Int) {
         let timestamp = Date().timeIntervalSince1970
@@ -225,11 +271,15 @@ class HammerTracker: ObservableObject {
         
         // For live view, we store frames and can analyze them later
         DispatchQueue.main.async {
-            self.currentTrajectory = Trajectory(frames: self.trackedFrames)
+            self.currentTrajectory = Trajectory(
+                frames: self.trackedFrames,
+                videoOrientation: self.videoOrientation,
+                videoSize: self.videoDisplaySize
+            )
         }
     }
     
-    // MARK: - Hammer Detection
+    // MARK: - Hammer Detection with Proper Coordinate Transformation
     private func detectHammer(in imageBuffer: CVImageBuffer, frameNumber: Int, timestamp: TimeInterval) {
         guard let model = detectionModel else { 
             if frameNumber % 30 == 0 {
@@ -251,61 +301,21 @@ class HammerTracker: ObservableObject {
                 return 
             }
             
-            // Debug: Print all detections
-            if frameNumber % 30 == 0 { // Every second at 30fps
+            // Debug output every second
+            if frameNumber % 30 == 0 && !results.isEmpty {
                 print("Frame \(frameNumber): Found \(results.count) detections")
-                for (index, detection) in results.enumerated() {
-                    print("  Detection \(index): Label=\(detection.labels.first?.identifier ?? "unknown"), Confidence=\(detection.confidence), Box=\(detection.boundingBox)")
-                }
             }
             
             // Find the best detection (highest confidence)
             if let bestDetection = results.first(where: { $0.confidence >= self.confidenceThreshold }) {
                 let boundingBox = bestDetection.boundingBox
                 
-                // TEMPORARY: Test different transformations to find the correct one
-                // We'll try multiple options and log them
-                if frameNumber % 30 == 0 {
-                    print("\n=== Testing Transformations Frame \(frameNumber) ===")
-                    print("Original box: \(boundingBox)")
-                    
-                    // Option 1: No transformation
-                    print("Option 1 (No transform): \(boundingBox)")
-                    
-                    // Option 2: 90° CW
-                    let box90CW = CGRect(
-                        x: boundingBox.minY,
-                        y: 1.0 - boundingBox.maxX,
-                        width: boundingBox.height,
-                        height: boundingBox.width
-                    )
-                    print("Option 2 (90° CW): \(box90CW)")
-                    
-                    // Option 3: 90° CCW
-                    let box90CCW = CGRect(
-                        x: 1.0 - boundingBox.maxY,
-                        y: boundingBox.minX,
-                        width: boundingBox.height,
-                        height: boundingBox.width
-                    )
-                    print("Option 3 (90° CCW): \(box90CCW)")
-                    
-                    // Option 4: 180°
-                    let box180 = CGRect(
-                        x: 1.0 - boundingBox.maxX,
-                        y: 1.0 - boundingBox.maxY,
-                        width: boundingBox.width,
-                        height: boundingBox.height
-                    )
-                    print("Option 4 (180°): \(box180)")
-                }
-                
-                // For now, let's try NO transformation to see if that fixes it
-                let transformedBox = boundingBox // No transformation
+                // When using videoOrientation in the handler, we should get
+                // correctly oriented coordinates - no transformation needed
                 
                 let trackedFrame = TrackedFrame(
                     frameNumber: frameNumber,
-                    boundingBox: transformedBox,
+                    boundingBox: boundingBox,
                     confidence: bestDetection.confidence,
                     timestamp: timestamp
                 )
@@ -313,33 +323,36 @@ class HammerTracker: ObservableObject {
                 self.trackedFrames.append(trackedFrame)
                 
                 if frameNumber % 30 == 0 {
-                    print("Using: No transformation")
-                    print("Final box: \(transformedBox)")
+                    print("\n=== Frame \(frameNumber) ===")
+                    print("Video orientation: \(self.videoOrientation)")
+                    print("Position: x=\(String(format: "%.3f", boundingBox.midX)), y=\(String(format: "%.3f", boundingBox.midY))")
+                    print("Size: w=\(String(format: "%.3f", boundingBox.width)), h=\(String(format: "%.3f", boundingBox.height))")
                 }
             }
         }
         
-        // Use .up orientation to get raw coordinates without any transformation
-        let handler = VNImageRequestHandler(cvPixelBuffer: imageBuffer, orientation: .up, options: [:])
+        // Use the video orientation directly for Vision
+        // This should give us coordinates that match the displayed video
+        let handler = VNImageRequestHandler(cvPixelBuffer: imageBuffer, orientation: videoOrientation, options: [:])
         do {
             try handler.perform([request])
         } catch {
             print("Failed to perform detection: \(error)")
         }
-    }
-    
-    // MARK: - Coordinate Transformation
+    }    
+    // MARK: - Professional Coordinate Transformation for iOS Videos
     private func transformBoundingBox(_ box: CGRect, orientation: CGImagePropertyOrientation) -> CGRect {
-        // VNRecognizedObjectObservation provides normalized coordinates (0-1)
-        // For iOS videos in portrait mode, we typically need to handle rotation
+        // Vision coordinates are normalized (0-1) in the buffer's coordinate space
+        // For iOS portrait videos, the buffer is in landscape orientation
+        // but the video is displayed in portrait
         
         switch orientation {
         case .up, .upMirrored:
-            // Normal orientation - no transformation needed
+            // Standard landscape video - no transformation needed
             return box
             
         case .down, .downMirrored:
-            // Rotated 180 degrees
+            // 180 degree rotation
             return CGRect(
                 x: 1.0 - box.maxX,
                 y: 1.0 - box.maxY,
@@ -348,8 +361,7 @@ class HammerTracker: ObservableObject {
             )
             
         case .left, .leftMirrored:
-            // Rotated 90 degrees CCW (common for portrait videos on iOS)
-            // This is typically what we get for portrait videos
+            // 90 degrees CCW
             return CGRect(
                 x: 1.0 - box.maxY,
                 y: box.minX,
@@ -358,7 +370,10 @@ class HammerTracker: ObservableObject {
             )
             
         case .right, .rightMirrored:
-            // Rotated 90 degrees CW (common for portrait videos recorded differently)
+            // 90 degrees CW - This is typical for iOS portrait videos
+            // The key insight: Vision gives us coordinates as if the video is landscape
+            // But we display it as portrait, so we need to swap x and y
+            // Transform: new_x = old_y, new_y = 1 - old_x
             return CGRect(
                 x: box.minY,
                 y: 1.0 - box.maxX,
@@ -368,32 +383,43 @@ class HammerTracker: ObservableObject {
         }
     }
     
-    private func orientationFromTransform(_ transform: CGAffineTransform) -> CGImagePropertyOrientation {
+    // MARK: - Improved Orientation Detection
+    private func orientationFromTransform(_ transform: CGAffineTransform, naturalSize: CGSize) -> CGImagePropertyOrientation {
         var assetOrientation = CGImagePropertyOrientation.up
         
-        // Check the transform values to determine orientation
-        // For iOS videos, portrait mode typically has specific transform values
-        
+        // Check transform values for common orientations
         if transform.a == 0 && transform.b == 1.0 && transform.c == -1.0 && transform.d == 0 {
-            assetOrientation = .right  // 90 CW - typical for iOS portrait video
+            // 90 degrees clockwise - typical for iOS portrait video
+            assetOrientation = .right
             print("Detected: 90° CW rotation (typical iOS portrait)")
         } else if transform.a == 0 && transform.b == -1.0 && transform.c == 1.0 && transform.d == 0 {
-            assetOrientation = .left   // 90 CCW
+            // 90 degrees counter-clockwise
+            assetOrientation = .left
             print("Detected: 90° CCW rotation")
         } else if transform.a == 1.0 && transform.b == 0 && transform.c == 0 && transform.d == 1.0 {
-            assetOrientation = .up     // No rotation (landscape)
+            // No rotation
+            assetOrientation = .up
             print("Detected: No rotation (landscape)")
         } else if transform.a == -1.0 && transform.b == 0 && transform.c == 0 && transform.d == -1.0 {
-            assetOrientation = .down   // 180 rotation
+            // 180 degree rotation
+            assetOrientation = .down
             print("Detected: 180° rotation")
         } else {
-            // For any other transform, try to guess based on the values
-            print("Unusual transform detected, using default")
+            // For other transforms, determine based on the result
+            let transformedSize = naturalSize.applying(transform)
+            if abs(transformedSize.width) < abs(transformedSize.height) {
+                // Portrait orientation
+                assetOrientation = .right
+                print("Guessed portrait orientation based on aspect ratio")
+            } else {
+                // Landscape orientation
+                assetOrientation = .up
+                print("Guessed landscape orientation based on aspect ratio")
+            }
         }
         
         return assetOrientation
-    }
-    
+    }    
     // MARK: - Trajectory Analysis
     func analyzeTrajectory() -> TrajectoryAnalysis? {
         guard trackedFrames.count > 20 else { return nil }
@@ -428,7 +454,7 @@ class HammerTracker: ObservableObject {
         guard trackedFrames.count > 7 else { return [] }
         
         var turningPoints: [TurningPoint] = []
-        var currentDirection: Int? = nil // 1 for positive (right), -1 for negative (left)
+        var currentDirection: Int? = nil
         
         // Find the first valid starting point
         var startIndex = 0
@@ -443,7 +469,7 @@ class HammerTracker: ObservableObject {
                 let currentX = trackedFrames[i + j].boundingBox.midX
                 let diff = currentX - startX
                 
-                if abs(diff) < 0.01 { // Increased threshold for more stable detection
+                if abs(diff) < 0.01 {
                     consistent = false
                     break
                 }
@@ -467,16 +493,14 @@ class HammerTracker: ObservableObject {
                 turningPoints.append(TurningPoint(
                     frameIndex: i,
                     point: point,
-                    isMaximum: direction < 0 // If starting to go left, this is a maximum
+                    isMaximum: direction < 0
                 ))
                 break
             }
         }
         
         // Find subsequent turning points
-        var noDetectionCount = 0
         for i in (startIndex + 1)..<trackedFrames.count {
-            // Check if we've had 15 frames without detection (end condition)
             if i > 0 && trackedFrames[i].timestamp - trackedFrames[i-1].timestamp > 15.0/30.0 {
                 break
             }
@@ -485,9 +509,8 @@ class HammerTracker: ObservableObject {
             
             let currentX = trackedFrames[i].boundingBox.midX
             let previousX = trackedFrames[i-1].boundingBox.midX
-            let diff = currentX - previousX
-            
-            if abs(diff) > 0.001 { // Significant movement
+            let diff = currentX - previousX            
+            if abs(diff) > 0.001 {
                 let frameDirection = diff > 0 ? 1 : -1
                 
                 if let dir = currentDirection, frameDirection != dir {
@@ -499,7 +522,7 @@ class HammerTracker: ObservableObject {
                     turningPoints.append(TurningPoint(
                         frameIndex: i-1,
                         point: point,
-                        isMaximum: dir > 0 // Was going right, so this is a maximum
+                        isMaximum: dir > 0
                     ))
                     currentDirection = frameDirection
                 }
@@ -526,12 +549,13 @@ class HammerTracker: ObservableObject {
                 angle = atan(heightDiff / horizontalDist) * 180.0 / .pi
                 
                 // Adjust sign based on tilt direction
-                // If start point is higher (smaller y), ellipse tilts left (negative angle)
-                // If start point is lower (larger y), ellipse tilts right (positive angle)
+                // In UIKit coordinates: y=0 is top, y increases downward
+                // If startPoint.y < endPoint.y: first point is higher (closer to top) → falls to the right
+                // If startPoint.y > endPoint.y: second point is higher → falls to the left
                 if startPoint.point.y < endPoint.point.y {
-                    angle = -abs(angle) // Tilts left
+                    angle = abs(angle) // Tilts right (positive angle)
                 } else {
-                    angle = abs(angle) // Tilts right
+                    angle = -abs(angle) // Tilts left (negative angle)
                 }
             }
             
@@ -564,7 +588,6 @@ class HammerTracker: ObservableObject {
         guard let trajectory = currentTrajectory else { return [] }
         
         return trajectory.smoothedPoints.map { point in
-            // Direct conversion - coordinates are already normalized (0-1)
             CGPoint(
                 x: point.x * displaySize.width,
                 y: point.y * displaySize.height
@@ -573,7 +596,11 @@ class HammerTracker: ObservableObject {
     }
     
     func getTrajectoryForLive() -> Trajectory {
-        return Trajectory(frames: trackedFrames)
+        return Trajectory(
+            frames: trackedFrames,
+            videoOrientation: videoOrientation,
+            videoSize: videoDisplaySize
+        )
     }
     
     func performLiveEllipseAnalysis() {
