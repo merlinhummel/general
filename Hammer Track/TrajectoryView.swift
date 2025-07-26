@@ -22,7 +22,7 @@ struct TrajectoryVideoContainer: UIViewRepresentable {
         let trajectoryLayer = CAShapeLayer()
         trajectoryLayer.strokeColor = UIColor.white.cgColor
         trajectoryLayer.fillColor = UIColor.clear.cgColor
-        trajectoryLayer.lineWidth = 3.0
+        trajectoryLayer.lineWidth = 1.5  // Reduced from 3.0
         trajectoryLayer.lineCap = .round
         trajectoryLayer.lineJoin = .round
         
@@ -36,7 +36,7 @@ struct TrajectoryVideoContainer: UIViewRepresentable {
         let currentPositionLayer = CAShapeLayer()
         currentPositionLayer.fillColor = UIColor.yellow.cgColor
         currentPositionLayer.strokeColor = UIColor.orange.cgColor
-        currentPositionLayer.lineWidth = 2.0
+        currentPositionLayer.lineWidth = 1.0  // Reduced from 2.0
         
         // Add shadow for better visibility
         currentPositionLayer.shadowColor = UIColor.black.cgColor

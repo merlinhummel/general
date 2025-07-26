@@ -15,6 +15,9 @@ struct SingleView: View {
     @StateObject private var hammerTracker = HammerTracker()
     @State private var showTrajectory = true
     @State private var videoSize: CGSize = .zero
+    @State private var currentEllipseAngle: Double? = nil
+    @State private var currentEllipseIndex: Int? = nil
+    @State private var totalEllipses: Int = 0
     
     var body: some View {
         VStack(spacing: 0) {
@@ -93,7 +96,44 @@ struct SingleView: View {
                     
                     // Small trajectory toggle in bottom right of video
                     VStack {
+                        // Ellipse info overlay at top
+                        HStack {
+                            if let angle = currentEllipseAngle, 
+                               let index = currentEllipseIndex, 
+                               totalEllipses > 0 {
+                                VStack(spacing: 1) {
+                                    Text("E\(index)/\(totalEllipses)")
+                                        .font(.caption2)
+                                        .fontWeight(.medium)
+                                    
+                                    HStack(spacing: 2) {
+                                        Image(systemName: angle > 0 ? "↗" : "↖")
+                                            .font(.caption2)
+                                        Text("\(String(format: "%.1f", abs(angle)))°")
+                                            .font(.caption)
+                                            .fontWeight(.bold)
+                                    }
+                                }
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(Color.black.opacity(0.7))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .stroke(angle > 0 ? Color.red : Color.blue, lineWidth: 1)
+                                        )
+                                )
+                                .shadow(radius: 2)
+                            }
+                            Spacer()
+                        }
+                        .padding(.leading, 12)
+                        .padding(.top, 12)
+                        
                         Spacer()
+                        
                         HStack {
                             Spacer()
                             Button(action: { showTrajectory.toggle() }) {
@@ -114,7 +154,10 @@ struct SingleView: View {
                     player: player,
                     isPlaying: $isPlaying,
                     currentTime: $currentTime,
-                    duration: $duration
+                    duration: $duration,
+                    currentEllipseAngle: currentEllipseAngle,
+                    currentEllipseIndex: currentEllipseIndex,
+                    totalEllipses: totalEllipses
                 )
                 .padding(.horizontal)
                 .padding(.vertical, 8)
@@ -187,6 +230,7 @@ struct SingleView: View {
             let interval = CMTime(seconds: 0.01, preferredTimescale: 600)
             timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
                 currentTime = time.seconds
+                updateCurrentEllipseAngle()
             }
         }
     }
@@ -203,6 +247,31 @@ struct SingleView: View {
                 print("Error processing video: \(error)")
             }
         }
+    }
+    
+    private func updateCurrentEllipseAngle() {
+        guard let analysis = hammerTracker.analysisResult else {
+            currentEllipseAngle = nil
+            currentEllipseIndex = nil
+            totalEllipses = 0
+            return
+        }
+        
+        totalEllipses = analysis.ellipses.count
+        
+        // Find the current ellipse based on current time
+        for (index, ellipse) in analysis.ellipses.enumerated() {
+            if let startTime = ellipse.frames.first?.timestamp,
+               let endTime = ellipse.frames.last?.timestamp,
+               currentTime >= startTime && currentTime <= endTime {
+                currentEllipseAngle = ellipse.angle
+                currentEllipseIndex = index + 1 // 1-based indexing for display
+                return
+            }
+        }
+        
+        currentEllipseAngle = nil
+        currentEllipseIndex = nil
     }
 }
 
@@ -260,6 +329,9 @@ struct VideoControlsView: View {
     @Binding var isPlaying: Bool
     @Binding var currentTime: Double
     @Binding var duration: Double
+    let currentEllipseAngle: Double?
+    let currentEllipseIndex: Int?
+    let totalEllipses: Int
     
     @State private var isDraggingSlider = false
     @State private var frameStepTimer: Timer?
@@ -318,14 +390,67 @@ struct VideoControlsView: View {
                     }
                 }, perform: {})
                 
-                // Play/Pause
-                Button(action: togglePlayPause) {
-                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                        .font(.title2)
-                        .frame(width: 44, height: 44)
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .clipShape(Circle())
+                // Play/Pause with improved ellipse display
+                VStack(spacing: 4) {
+                    // Enhanced ellipse info display
+                    if let angle = currentEllipseAngle, 
+                       let index = currentEllipseIndex, 
+                       totalEllipses > 0 {
+                        VStack(spacing: 2) {
+                            // Ellipse number
+                            Text("Ellipse \(index)/\(totalEllipses)")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            
+                            // Angle with visual direction indicator
+                            HStack(spacing: 4) {
+                                // Direction arrow
+                                Image(systemName: angle > 0 ? "arrow.up.right" : "arrow.up.left")
+                                    .font(.caption2)
+                                    .foregroundColor(angle > 0 ? .red : .blue)
+                                
+                                // Angle value
+                                Text(String(format: "%.1f°", abs(angle)))
+                                    .font(.caption)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.primary)
+                                
+                                // Direction text
+                                Text(angle > 0 ? "rechts" : "links")
+                                    .font(.caption2)
+                                    .foregroundColor(angle > 0 ? .red : .blue)
+                            }
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color(.systemGray6))
+                        .cornerRadius(8)
+                    } else if totalEllipses > 0 {
+                        Text("Zwischen Ellipsen")
+                            .font(.caption2)
+                            .foregroundColor(.gray)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color(.systemGray6))
+                            .cornerRadius(8)
+                    } else {
+                        Text("Keine Ellipsen erkannt")
+                            .font(.caption2)
+                            .foregroundColor(.gray)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color(.systemGray6))
+                            .cornerRadius(8)
+                    }
+                    
+                    Button(action: togglePlayPause) {
+                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                            .font(.title2)
+                            .frame(width: 44, height: 44)
+                            .background(Color.blue)
+                            .foregroundColor(.white)
+                            .clipShape(Circle())
+                    }
                 }
                 
                 // Frame forward

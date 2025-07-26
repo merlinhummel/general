@@ -20,7 +20,7 @@ struct SimpleTrajectoryView: UIViewRepresentable {
         let trajectoryLayer = CAShapeLayer()
         trajectoryLayer.strokeColor = UIColor.red.cgColor
         trajectoryLayer.fillColor = UIColor.clear.cgColor
-        trajectoryLayer.lineWidth = 3.0
+        trajectoryLayer.lineWidth = 1.5  // Reduced from 3.0
         containerView.layer.addSublayer(trajectoryLayer)
         
         // Current position dot

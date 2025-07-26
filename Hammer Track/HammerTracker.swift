@@ -425,14 +425,20 @@ class HammerTracker: ObservableObject {
         guard trackedFrames.count > 20 else { return nil }
         
         let turningPoints = findTurningPoints()
-        guard turningPoints.count >= 2 else { return nil }
+        guard turningPoints.count >= 3 else { 
+            print("Nicht genug Umkehrpunkte gefunden: \(turningPoints.count). Mindestens 3 benötigt.")
+            return nil 
+        }
         
-        let ellipses = createEllipses(from: turningPoints)
+        let ellipses = createEllipsesFromThreePoints(from: turningPoints)
         
         // Skip the first 2 ellipses as requested
         let analyzedEllipses = Array(ellipses.dropFirst(2))
         
-        guard !analyzedEllipses.isEmpty else { return nil }
+        guard !analyzedEllipses.isEmpty else { 
+            print("Keine Ellipsen nach dem Überspringen der ersten 2 verfügbar.")
+            return nil 
+        }
         
         let averageAngle = analyzedEllipses.reduce(0.0) { $0 + $1.angle } / Double(analyzedEllipses.count)
         
@@ -446,30 +452,77 @@ class HammerTracker: ObservableObject {
             self.analysisResult = analysis
         }
         
+        print("=== Trajektorienanalyse abgeschlossen ===")
+        print("Umkehrpunkte gesamt: \(turningPoints.count)")
+        print("Ellipsen erstellt: \(ellipses.count)")
+        print("Ellipsen analysiert (nach Überspringen): \(analyzedEllipses.count)")
+        print("Durchschnittlicher Winkel: \(String(format: "%.2f", averageAngle))°")
+        
         return analysis
     }
     
-    // MARK: - Turning Points Detection
+    /// Erstellt Ellipsen basierend auf 3-Punkte-Trajektorien
+    /// Der 3. Punkt einer Trajektorie ist der 1. Punkt der nächsten
+    private func createEllipsesFromThreePoints(from turningPoints: [TurningPoint]) -> [Ellipse] {
+        var ellipses: [Ellipse] = []
+        
+        // Gehe durch alle möglichen 3-Punkte-Kombinationen
+        // Punkt i, i+1, i+2 bilden eine Ellipse
+        // Der Winkel wird zwischen Punkt i und i+1 berechnet
+        for i in 0..<(turningPoints.count - 2) {
+            let firstPoint = turningPoints[i]      // Punkt 1 der Trajektorie
+            let secondPoint = turningPoints[i + 1] // Punkt 2 der Trajektorie  
+            let thirdPoint = turningPoints[i + 2]  // Punkt 3 der Trajektorie (wird zu Punkt 1 der nächsten)
+            
+            // Berechne Winkel zwischen erstem und zweitem Punkt
+            let angle = calculateEllipseAngleWithPythagoras(
+                startPoint: firstPoint.point, 
+                endPoint: secondPoint.point
+            )
+            
+            // Frames für diese Ellipse (vom ersten bis zum dritten Punkt)
+            let ellipseFrames = Array(trackedFrames[firstPoint.frameIndex...thirdPoint.frameIndex])
+            
+            let ellipse = Ellipse(
+                startPoint: firstPoint,
+                endPoint: secondPoint, // Winkel basiert auf ersten beiden Punkten
+                angle: angle,
+                frames: ellipseFrames
+            )
+            
+            ellipses.append(ellipse)
+            
+            print("3-Punkt-Ellipse \(i+1): P1(\(String(format: "%.3f", firstPoint.point.x)), \(String(format: "%.3f", firstPoint.point.y))) -> P2(\(String(format: "%.3f", secondPoint.point.x)), \(String(format: "%.3f", secondPoint.point.y))) -> P3(\(String(format: "%.3f", thirdPoint.point.x)), \(String(format: "%.3f", thirdPoint.point.y))) | Winkel: \(String(format: "%.2f", angle))°")
+        }
+        
+        return ellipses
+    }
+    
+    // MARK: - Turning Points Detection (Optimiert für 3-Punkte-Ellipsen)
     private func findTurningPoints() -> [TurningPoint] {
-        guard trackedFrames.count > 7 else { return [] }
+        guard trackedFrames.count > 15 else { return [] } // Erhöht von 7 auf 15
         
         var turningPoints: [TurningPoint] = []
         var currentDirection: Int? = nil
         
+        // Verbesserte Parameter für stabilere Erkennung
+        let minConsistentFrames = 10  // Mindestens 10 konsistente Frames
+        let minMovementThreshold = 0.015  // Erhöht von 0.01 auf 0.015
+        
         // Find the first valid starting point
         var startIndex = 0
-        for i in 0..<(trackedFrames.count - 7) {
+        for i in 0..<(trackedFrames.count - minConsistentFrames) {
             let startX = trackedFrames[i].boundingBox.midX
             var consistent = true
             var direction = 0
             
-            // Check if next 7 frames go consistently in one direction
-            for j in 1...7 {
+            // Check if next frames go consistently in one direction
+            for j in 1...minConsistentFrames {
                 if i + j >= trackedFrames.count { break }
                 let currentX = trackedFrames[i + j].boundingBox.midX
                 let diff = currentX - startX
                 
-                if abs(diff) < 0.01 {
+                if abs(diff) < minMovementThreshold {
                     consistent = false
                     break
                 }
@@ -495,22 +548,31 @@ class HammerTracker: ObservableObject {
                     point: point,
                     isMaximum: direction < 0
                 ))
+                print("Startpunkt gefunden bei Frame \(i): Richtung \(direction > 0 ? "rechts" : "links")")
                 break
             }
         }
         
-        // Find subsequent turning points
+        // Find subsequent turning points with improved logic
+        var framesSinceLastTurn = 0
+        let minFramesBetweenTurns = 15  // Mindestabstand zwischen Umkehrpunkten
+        
         for i in (startIndex + 1)..<trackedFrames.count {
+            // Check for time jumps (skip if too much time passed)
             if i > 0 && trackedFrames[i].timestamp - trackedFrames[i-1].timestamp > 15.0/30.0 {
+                print("Zeitsprung erkannt bei Frame \(i), Analyse beendet")
                 break
             }
+            
+            framesSinceLastTurn += 1
             
             if i == 0 { continue }
             
             let currentX = trackedFrames[i].boundingBox.midX
             let previousX = trackedFrames[i-1].boundingBox.midX
-            let diff = currentX - previousX            
-            if abs(diff) > 0.001 {
+            let diff = currentX - previousX
+            
+            if abs(diff) > minMovementThreshold && framesSinceLastTurn >= minFramesBetweenTurns {
                 let frameDirection = diff > 0 ? 1 : -1
                 
                 if let dir = currentDirection, frameDirection != dir {
@@ -524,15 +586,23 @@ class HammerTracker: ObservableObject {
                         point: point,
                         isMaximum: dir > 0
                     ))
+                    print("Umkehrpunkt \(turningPoints.count) bei Frame \(i-1): \(dir > 0 ? "Maximum" : "Minimum") -> \(frameDirection > 0 ? "rechts" : "links")")
                     currentDirection = frameDirection
+                    framesSinceLastTurn = 0
                 }
             }
+        }
+        
+        print("=== Umkehrpunkt-Erkennung abgeschlossen ===")
+        print("Gefunden: \(turningPoints.count) Umkehrpunkte")
+        for (index, point) in turningPoints.enumerated() {
+            print("  Punkt \(index + 1): Frame \(point.frameIndex), Position (\(String(format: "%.3f", point.point.x)), \(String(format: "%.3f", point.point.y))), \(point.isMaximum ? "Maximum" : "Minimum")")
         }
         
         return turningPoints
     }
     
-    // MARK: - Ellipse Creation
+    // MARK: - Ellipse Creation (Legacy - 2-Punkt-Ellipsen)
     private func createEllipses(from turningPoints: [TurningPoint]) -> [Ellipse] {
         var ellipses: [Ellipse] = []
         
@@ -540,24 +610,11 @@ class HammerTracker: ObservableObject {
             let startPoint = turningPoints[i]
             let endPoint = turningPoints[i + 1]
             
-            // Calculate angle
-            let heightDiff = endPoint.point.y - startPoint.point.y
-            let horizontalDist = abs(endPoint.point.x - startPoint.point.x)
-            
-            var angle: Double = 0.0
-            if horizontalDist > 0.001 {
-                angle = atan(heightDiff / horizontalDist) * 180.0 / .pi
-                
-                // Adjust sign based on tilt direction
-                // In UIKit coordinates: y=0 is top, y increases downward
-                // If startPoint.y < endPoint.y: first point is higher (closer to top) → falls to the right
-                // If startPoint.y > endPoint.y: second point is higher → falls to the left
-                if startPoint.point.y < endPoint.point.y {
-                    angle = abs(angle) // Tilts right (positive angle)
-                } else {
-                    angle = -abs(angle) // Tilts left (negative angle)
-                }
-            }
+            // Berechne Winkel mit Pythagoras (Hypothenusenwinkel)
+            let angle = calculateEllipseAngleWithPythagoras(
+                startPoint: startPoint.point, 
+                endPoint: endPoint.point
+            )
             
             // Get frames for this ellipse
             let ellipseFrames = Array(trackedFrames[startPoint.frameIndex...endPoint.frameIndex])
@@ -570,9 +627,47 @@ class HammerTracker: ObservableObject {
             )
             
             ellipses.append(ellipse)
+            
+            // Debug output für jede Ellipse
+            print("Ellipse \(i+1): Start(\(String(format: "%.3f", startPoint.point.x)), \(String(format: "%.3f", startPoint.point.y))) -> End(\(String(format: "%.3f", endPoint.point.x)), \(String(format: "%.3f", endPoint.point.y))) = \(String(format: "%.2f", angle))° \(angle > 0 ? "rechts" : "links")")
         }
         
         return ellipses
+    }
+    
+    /// Berechnet den Ellipsenwinkel mit Pythagoras
+    /// - Parameters:
+    ///   - startPoint: Erster Umkehrpunkt der Trajektorie
+    ///   - endPoint: Zweiter Umkehrpunkt der Trajektorie
+    /// - Returns: Winkel in Grad (positiv = fällt nach rechts, negativ = fällt nach links)
+    private func calculateEllipseAngleWithPythagoras(startPoint: CGPoint, endPoint: CGPoint) -> Double {
+        // Abstände berechnen
+        let horizontalDistance = abs(endPoint.x - startPoint.x)  // Ankathete
+        let verticalDistance = abs(endPoint.y - startPoint.y)    // Gegenkathete
+        
+        // Prüfe auf gültigen horizontalen Abstand
+        guard horizontalDistance > 0.001 else {
+            return 0.0 // Vertikale Linie, kein Winkel
+        }
+        
+        // Hypothenuse mit Pythagoras: c² = a² + b²
+        let hypotenuse = sqrt(horizontalDistance * horizontalDistance + verticalDistance * verticalDistance)
+        
+        // Winkel berechnen: sin(angle) = Gegenkathete / Hypothenuse
+        let angleRadians = asin(verticalDistance / hypotenuse)
+        let angleDegrees = angleRadians * 180.0 / .pi
+        
+        // Richtung bestimmen: Welcher Punkt ist höher?
+        // In normalisierten Koordinaten: Y=0 ist unten, Y=1 ist oben
+        let isStartPointHigher = startPoint.y > endPoint.y
+        
+        if isStartPointHigher {
+            // Erster Punkt höher → Trajektorie fällt nach rechts → positiver Winkel
+            return angleDegrees
+        } else {
+            // Zweiter Punkt höher → Trajektorie fällt nach links → negativer Winkel
+            return -angleDegrees
+        }
     }
     
     // MARK: - Helper Methods

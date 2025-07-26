@@ -39,7 +39,7 @@ struct ZoomableVideoView: UIViewRepresentable {
         let trajectoryLayer = CAShapeLayer()
         trajectoryLayer.strokeColor = UIColor.white.cgColor
         trajectoryLayer.fillColor = UIColor.clear.cgColor
-        trajectoryLayer.lineWidth = 3.0
+        trajectoryLayer.lineWidth = 1.5  // Reduced from 3.0
         trajectoryLayer.lineCap = .round
         trajectoryLayer.lineJoin = .round
         
@@ -54,7 +54,7 @@ struct ZoomableVideoView: UIViewRepresentable {
         let currentPositionLayer = CAShapeLayer()
         currentPositionLayer.fillColor = UIColor.yellow.cgColor
         currentPositionLayer.strokeColor = UIColor.orange.cgColor
-        currentPositionLayer.lineWidth = 2.0
+        currentPositionLayer.lineWidth = 1.0  // Reduced from 2.0
         
         // Add shadow for better visibility
         currentPositionLayer.shadowColor = UIColor.black.cgColor
@@ -102,6 +102,10 @@ struct ZoomableVideoView: UIViewRepresentable {
         weak var playerLayer: AVPlayerLayer?
         weak var trajectoryLayer: CAShapeLayer?
         weak var currentPositionLayer: CAShapeLayer?
+        
+        // Zoom state
+        var currentZoomScale: CGFloat = 1.0
+        var currentContentOffset: CGPoint = .zero
         
         func updateLayout() {
             guard let containerView = containerView,
@@ -157,6 +161,12 @@ struct ZoomableVideoView: UIViewRepresentable {
             
             // Center the content if it's smaller than scroll view
             centerContent()
+            
+            // Restore zoom state if we had one
+            if currentZoomScale > 1.0 {
+                scrollView.setZoomScale(currentZoomScale, animated: false)
+                scrollView.setContentOffset(currentContentOffset, animated: false)
+            }
         }        
         func centerContent() {
             guard let scrollView = scrollView else { return }
@@ -292,6 +302,19 @@ struct ZoomableVideoView: UIViewRepresentable {
         
         func scrollViewDidZoom(_ scrollView: UIScrollView) {
             centerContent()
+            // Save zoom state
+            currentZoomScale = scrollView.zoomScale
+            currentContentOffset = scrollView.contentOffset
+        }
+        
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            // Save zoom state when dragging ends
+            currentContentOffset = scrollView.contentOffset
+        }
+        
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+            // Save zoom state when scrolling ends
+            currentContentOffset = scrollView.contentOffset
         }
         
         // MARK: - Gesture Handlers
