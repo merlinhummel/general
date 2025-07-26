@@ -9,61 +9,108 @@ struct LiveView: View {
     @State private var showAnalysisResults = false
     @State private var analysisResultText = ""
     @StateObject private var hammerTracker = HammerTracker()
+    @State private var showFocusIndicator = false
+    @State private var focusLocation = CGPoint.zero
+    @Environment(\.presentationMode) var presentationMode
     
     var body: some View {
-        ZStack {
-            // Camera Preview
-            CameraPreview(session: cameraManager.session)
-                .ignoresSafeArea()
+        VStack(spacing: 0) {
+            // Header with back button
+            HStack {
+                Button(action: {
+                    // Stop camera and go back
+                    cameraManager.stopSession()
+                    presentationMode.wrappedValue.dismiss()
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 14, weight: .semibold))
+                        Text("Zurück")
+                            .font(.system(size: 14))
+                    }
+                    .foregroundColor(.blue)
+                }
+                
+                Spacer()
+                
+                Text("Live View")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(.primary)
+                
+                Spacer()
+                
+                // Placeholder for balance
+                Color.clear
+                    .frame(width: 60, height: 20)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(Color(.systemGray6))
+            
+            // Main content area with camera
+            ZStack {
+                // Camera Preview with tap to focus
+                CameraPreview(session: cameraManager.session, onTap: { location in
+                    focusLocation = location
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showFocusIndicator = true
+                    }
+                    cameraManager.setFocus(at: location)
+                    
+                    // Hide focus indicator after a moment
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            showFocusIndicator = false
+                        }
+                    }
+                })
+                    .ignoresSafeArea(edges: .bottom)
+                
+                // Focus indicator
+                if showFocusIndicator {
+                    FocusIndicatorView()
+                        .position(focusLocation)
+                        .allowsHitTesting(false)
+                }
             
             // Overlay Controls
             VStack {
-                // Top Bar
-                HStack {
-                    Text("Live View")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.white)
-                        .padding()
-                        .background(Color.black.opacity(0.5))
-                        .cornerRadius(10)
-                    
-                    Spacer()
-                    
-                    if isAnalysisMode {
-                        VStack(alignment: .trailing, spacing: 4) {
-                            HStack {
-                                Text(cameraManager.isDetectingPose ? "Arm erkannt - Bereit" : "Arm heben zum Start")
-                                    .font(.caption)
-                                    .foregroundColor(.white)
-                                
-                                if cameraManager.isActivelyTracking {
-                                    Circle()
-                                        .fill(Color.red)
-                                        .frame(width: 10, height: 10)
-                                        .overlay(
-                                            Circle()
-                                                .stroke(Color.red, lineWidth: 2)
-                                                .scaleEffect(1.5)
-                                                .opacity(0.5)
-                                                .animation(.easeInOut(duration: 1).repeatForever(), value: cameraManager.isActivelyTracking)
-                                        )
-                                }
-                            }
+                Spacer()
+                
+                if isAnalysisMode {
+                    // Analysis status at top
+                    VStack(alignment: .center, spacing: 4) {
+                        HStack {
+                            Text(cameraManager.isDetectingPose ? "Arm erkannt - Bereit" : "Arm heben zum Start")
+                                .font(.caption)
+                                .foregroundColor(.white)
                             
-                            if cameraManager.framesWithoutHammer > 0 && cameraManager.isActivelyTracking {
-                                Text("Frames ohne Hammer: \(cameraManager.framesWithoutHammer)/7")
-                                    .font(.caption2)
-                                    .foregroundColor(.yellow)
+                            if cameraManager.isActivelyTracking {
+                                Circle()
+                                    .fill(Color.red)
+                                    .frame(width: 10, height: 10)
+                                    .overlay(
+                                        Circle()
+                                            .stroke(Color.red, lineWidth: 2)
+                                            .scaleEffect(1.5)
+                                            .opacity(0.5)
+                                            .animation(.easeInOut(duration: 1).repeatForever(), value: cameraManager.isActivelyTracking)
+                                    )
                             }
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(cameraManager.isActivelyTracking ? Color.red : Color.orange)
-                        .cornerRadius(15)
+                        
+                        if cameraManager.framesWithoutHammer > 0 && cameraManager.isActivelyTracking {
+                            Text("Frames ohne Hammer: \(cameraManager.framesWithoutHammer)/7")
+                                .font(.caption2)
+                                .foregroundColor(.yellow)
+                        }
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(cameraManager.isActivelyTracking ? Color.red : Color.orange)
+                    .cornerRadius(15)
+                    .padding(.top, 20)
                 }
-                .padding()
                 
                 Spacer()
                 
@@ -142,33 +189,52 @@ struct LiveView: View {
                     }
                     
                     // Camera Settings
-                    HStack(spacing: 20) {
-                        // Flash Toggle
-                        Button(action: {
-                            cameraManager.toggleFlash()
-                        }) {
-                            Image(systemName: cameraManager.flashMode == .on ? "bolt.fill" : "bolt.slash.fill")
-                                .font(.title2)
-                                .foregroundColor(.white)
-                                .frame(width: 50, height: 50)
-                                .background(Color.black.opacity(0.5))
-                                .clipShape(Circle())
+                    VStack(spacing: 15) {
+                        // Zoom Controls
+                        HStack(spacing: 10) {
+                            ForEach(cameraManager.availableZoomFactors, id: \.self) { factor in
+                                Button(action: {
+                                    cameraManager.setZoomFactor(factor)
+                                }) {
+                                    Text("\(factor, specifier: "%.1f")x")
+                                        .font(.system(size: 14, weight: cameraManager.currentZoomFactor == factor ? .bold : .regular))
+                                        .foregroundColor(cameraManager.currentZoomFactor == factor ? .black : .white)
+                                        .frame(width: 45, height: 35)
+                                        .background(cameraManager.currentZoomFactor == factor ? Color.white : Color.black.opacity(0.5))
+                                        .cornerRadius(8)
+                                }
+                            }
                         }
                         
-                        // Camera Switch
-                        Button(action: {
-                            cameraManager.switchCamera()
-                        }) {
-                            Image(systemName: "camera.rotate")
-                                .font(.title2)
-                                .foregroundColor(.white)
-                                .frame(width: 50, height: 50)
-                                .background(Color.black.opacity(0.5))
-                                .clipShape(Circle())
+                        HStack(spacing: 20) {
+                            // Flash Toggle
+                            Button(action: {
+                                cameraManager.toggleFlash()
+                            }) {
+                                Image(systemName: cameraManager.flashMode == .on ? "bolt.fill" : "bolt.slash.fill")
+                                    .font(.title2)
+                                    .foregroundColor(.white)
+                                    .frame(width: 50, height: 50)
+                                    .background(Color.black.opacity(0.5))
+                                    .clipShape(Circle())
+                            }
+                            
+                            // Camera Switch
+                            Button(action: {
+                                cameraManager.switchCamera()
+                            }) {
+                                Image(systemName: "camera.rotate")
+                                    .font(.title2)
+                                    .foregroundColor(.white)
+                                    .frame(width: 50, height: 50)
+                                    .background(Color.black.opacity(0.5))
+                                    .clipShape(Circle())
+                            }
                         }
                     }
                 }
                 .padding(.bottom, 40)
+            }
             }
         }
         .navigationBarHidden(true)
@@ -229,6 +295,8 @@ class CameraManager: NSObject, ObservableObject {
     @Published var isActivelyTracking = false
     @Published var poseDetectionStatus = "Warte auf Arm-Bewegung..."
     @Published var framesWithoutHammer = 0
+    @Published var currentZoomFactor: CGFloat = 1.0
+    @Published var availableZoomFactors: [CGFloat] = [1.0]
     
     private var output = AVCaptureMovieFileOutput()
     private var videoDataOutput = AVCaptureVideoDataOutput()
@@ -393,6 +461,118 @@ class CameraManager: NSObject, ObservableObject {
         }
         
         session.commitConfiguration()
+        
+        // Setup available zoom factors
+        updateAvailableZoomFactors()
+    }
+    
+    // MARK: - Focus and Zoom Methods
+    
+    func setFocus(at point: CGPoint) {
+        guard let device = currentCamera else { return }
+        
+        do {
+            try device.lockForConfiguration()
+            
+            if device.isFocusPointOfInterestSupported && device.isFocusModeSupported(.autoFocus) {
+                device.focusPointOfInterest = point
+                device.focusMode = .autoFocus
+            }
+            
+            if device.isExposurePointOfInterestSupported && device.isExposureModeSupported(.autoExpose) {
+                device.exposurePointOfInterest = point
+                device.exposureMode = .autoExpose
+            }
+            
+            device.unlockForConfiguration()
+        } catch {
+            print("Error setting focus: \(error)")
+        }
+    }
+    
+    func setZoomFactor(_ factor: CGFloat) {
+        guard let device = currentCamera else { return }
+        
+        // For 0.5x, try to switch to ultra-wide camera
+        if factor == 0.5 {
+            if let ultraWide = AVCaptureDevice.default(.builtInUltraWideCamera, for: .video, position: .back) {
+                switchToCamera(ultraWide)
+                currentZoomFactor = factor
+                return
+            }
+        }
+        
+        // For standard zoom levels, use the wide camera with zoom
+        if let wideCamera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) {
+            if device != wideCamera {
+                switchToCamera(wideCamera)
+            }
+        }
+        
+        do {
+            try device.lockForConfiguration()
+            
+            // Clamp the zoom factor to device limits
+            let clampedFactor = max(device.minAvailableVideoZoomFactor, 
+                                   min(factor, device.maxAvailableVideoZoomFactor))
+            
+            device.videoZoomFactor = clampedFactor
+            currentZoomFactor = factor
+            device.unlockForConfiguration()
+        } catch {
+            print("Error setting zoom: \(error)")
+        }
+    }
+    
+    private func switchToCamera(_ newCamera: AVCaptureDevice) {
+        session.beginConfiguration()
+        
+        // Remove current input
+        if let currentInput = videoDeviceInput {
+            session.removeInput(currentInput)
+        }
+        
+        // Add new input
+        do {
+            let newInput = try AVCaptureDeviceInput(device: newCamera)
+            if session.canAddInput(newInput) {
+                session.addInput(newInput)
+                videoDeviceInput = newInput
+                currentCamera = newCamera
+            }
+        } catch {
+            print("Error switching camera for zoom: \(error)")
+        }
+        
+        session.commitConfiguration()
+    }
+    
+    private func updateAvailableZoomFactors() {
+        guard let device = currentCamera else { return }
+        
+        var factors: [CGFloat] = []
+        
+        // Check for ultra wide camera (0.5x)
+        if let _ = AVCaptureDevice.default(.builtInUltraWideCamera, for: .video, position: .back) {
+            factors.append(0.5)
+        }
+        
+        // Standard wide camera (1.0x)
+        factors.append(1.0)
+        
+        // Check for telephoto camera or zoom capability
+        if device.maxAvailableVideoZoomFactor >= 2.0 {
+            factors.append(2.0)
+        }
+        
+        // Some devices have 3x zoom
+        if device.maxAvailableVideoZoomFactor >= 3.0 {
+            factors.append(3.0)
+        }
+        
+        DispatchQueue.main.async {
+            self.availableZoomFactors = factors
+        }
     }
     
     func startSession() {
@@ -570,18 +750,31 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     }
 }
 
-// Camera Preview remains the same
+// Camera Preview with tap to focus
 struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
+    let onTap: ((CGPoint) -> Void)?
+    
+    init(session: AVCaptureSession, onTap: ((CGPoint) -> Void)? = nil) {
+        self.session = session
+        self.onTap = onTap
+    }
     
     func makeUIView(context: Context) -> UIView {
         let view = UIView(frame: .zero)
+        
+        // Add tap gesture
+        let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(context.coordinator.handleTap(_:)))
+        view.addGestureRecognizer(tapGesture)
         
         let previewLayer = AVCaptureVideoPreviewLayer(session: session)
         previewLayer.videoGravity = .resizeAspectFill
         previewLayer.connection?.videoRotationAngle = 90.0
         
         view.layer.addSublayer(previewLayer)
+        
+        // Store preview layer reference
+        context.coordinator.previewLayer = previewLayer
         
         DispatchQueue.main.async {
             previewLayer.frame = view.bounds
@@ -596,5 +789,60 @@ struct CameraPreview: UIViewRepresentable {
                 layer.frame = uiView.bounds
             }
         }
+    }
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onTap: onTap)
+    }
+    
+    class Coordinator: NSObject {
+        let onTap: ((CGPoint) -> Void)?
+        weak var previewLayer: AVCaptureVideoPreviewLayer?
+        
+        init(onTap: ((CGPoint) -> Void)?) {
+            self.onTap = onTap
+        }
+        
+        @objc func handleTap(_ gesture: UITapGestureRecognizer) {
+            let location = gesture.location(in: gesture.view)
+            
+            // Convert to device coordinates if preview layer exists
+            if let previewLayer = previewLayer {
+                let devicePoint = previewLayer.captureDevicePointConverted(fromLayerPoint: location)
+                // Pass the UI location for the indicator
+                onTap?(location)
+                
+                // Find camera manager through responder chain and set focus
+                if let window = gesture.view?.window,
+                   let rootViewController = window.rootViewController,
+                   let cameraManager = findCameraManager(in: rootViewController) {
+                    cameraManager.setFocus(at: devicePoint)
+                }
+            } else {
+                onTap?(location)
+            }
+        }
+        
+        private func findCameraManager(in viewController: UIViewController) -> CameraManager? {
+            // This is a simplified approach - in production, you'd use a proper delegate pattern
+            return nil
+        }
+    }
+}
+// Focus Indicator View
+struct FocusIndicatorView: View {
+    @State private var animating = false
+    
+    var body: some View {
+        Rectangle()
+            .stroke(Color.yellow, lineWidth: 2)
+            .frame(width: 80, height: 80)
+            .scaleEffect(animating ? 0.8 : 1.0)
+            .opacity(animating ? 0.8 : 1.0)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    animating = true
+                }
+            }
     }
 }

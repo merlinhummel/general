@@ -18,28 +18,29 @@ struct SingleView: View {
     @State private var currentEllipseAngle: Double? = nil
     @State private var currentEllipseIndex: Int? = nil
     @State private var totalEllipses: Int = 0
+    @Environment(\.presentationMode) var presentationMode
     
     var body: some View {
         VStack(spacing: 0) {
-            // Header with back button
+            // Header with back button (always visible)
             HStack {
-                if player != nil {
-                    Button(action: {
-                        // Reset player and go back
+                Button(action: {
+                    if player != nil {
+                        // Reset player and go back to selection
                         player = nil
                         selectedVideoURL = nil
-                    }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 14, weight: .semibold))
-                            Text("Zurück")
-                                .font(.system(size: 14))
-                        }
-                        .foregroundColor(.blue)
+                    } else {
+                        // Go back to main menu
+                        presentationMode.wrappedValue.dismiss()
                     }
-                } else {
-                    Color.clear
-                        .frame(width: 60, height: 20)
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 14, weight: .semibold))
+                        Text("Zurück")
+                            .font(.system(size: 14))
+                    }
+                    .foregroundColor(.blue)
                 }
                 
                 Spacer()

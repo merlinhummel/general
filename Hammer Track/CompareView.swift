@@ -20,23 +20,46 @@ struct CompareView: View {
     @State private var showTrajectory = true
     @State private var videoSize1: CGSize = .zero
     @State private var videoSize2: CGSize = .zero
+    @Environment(\.presentationMode) var presentationMode
     
     var body: some View {
         VStack(spacing: 0) {
-            // Minimal header
+            // Header with back button (always visible)
             HStack {
-                Text("Compare View")
-                    .font(.caption)
-                    .foregroundColor(.gray)
-                Spacer()
-                Button("Videos auswählen") {
-                    showingVideoPicker = true
+                Button(action: {
+                    if player1 != nil || player2 != nil {
+                        // Reset players and go back to selection
+                        player1 = nil
+                        player2 = nil
+                        selectedVideoURLs = []
+                    } else {
+                        // Go back to main menu
+                        presentationMode.wrappedValue.dismiss()
+                    }
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 14, weight: .semibold))
+                        Text("Zurück")
+                            .font(.system(size: 14))
+                    }
+                    .foregroundColor(.blue)
                 }
-                .font(.caption2)
-                .foregroundColor(.blue)
+                
+                Spacer()
+                
+                Text("Compare View")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(.primary)
+                
+                Spacer()
+                
+                // Placeholder for balance
+                Color.clear
+                    .frame(width: 60, height: 20)
             }
             .padding(.horizontal)
-            .padding(.vertical, 4)
+            .padding(.vertical, 8)
             .background(Color(.systemGray6))
             
             if selectedVideoURLs.count == 2 {
