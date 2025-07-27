@@ -3,8 +3,12 @@
 <plist version="1.0">
 <dict>
 	<key>NSCameraUsageDescription</key>
-	<string>Hammer Track benötigt Kamerazugriff für die Live-Analyse von Hammerwürfen.</string>
+	<string>Hammer Track benötigt Kamerazugriff für die Live-Analyse von Hammerwürfen und zur präzisen Bewegungserkennung.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Hammer Track benötigt Zugriff auf Ihre Fotos, um Videos für die Analyse auszuwählen.</string>
+	<string>Hammer Track benötigt Zugriff auf Ihre Fotos, um Videos für die detaillierte Wurf-Analyse auszuwählen.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Hammer Track verwendet das Mikrofon für die Sprachausgabe der Analyseergebnisse und akustisches Feedback.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Hammer Track nutzt Spracherkennung für verbale Kommandos während der Live-Analyse.</string>
 </dict>
 </plist>
