@@ -121,8 +121,9 @@ class HammerTracker: ObservableObject {
     private var trackedFrames: [TrackedFrame] = []
     private let confidenceThreshold: Float = 0.3
     
-    // Frame processing
-    private let processingQueue = DispatchQueue(label: "com.hammertrack.processing", qos: .userInitiated)
+    // Frame processing with optimized queues
+    private let processingQueue = DispatchQueue(label: "com.hammertrack.processing", qos: .userInitiated, attributes: .concurrent)
+    private let visionQueue = DispatchQueue(label: "com.hammertrack.vision", qos: .userInitiated)
     
     // Video properties
     private var videoOrientation: CGImagePropertyOrientation = .up
@@ -221,10 +222,12 @@ class HammerTracker: ObservableObject {
         reader.add(output)
         reader.startReading()
         
-        processingQueue.async { [weak self] in
+        visionQueue.async { [weak self] in
             guard let self = self else { return }
             
             var frameNumber = 0
+            var lastProgressUpdate: TimeInterval = 0
+            let progressUpdateInterval: TimeInterval = 0.1 // Update every 100ms instead of every frame
             
             while reader.status == .reading {
                 autoreleasepool {
@@ -237,16 +240,21 @@ class HammerTracker: ObservableObject {
                         
                         frameNumber += 1
                         
-                        // Update progress
-                        DispatchQueue.main.async {
-                            self.progress = timestamp / durationTime
+                        // Throttled UI progress updates - only every 100ms instead of every frame
+                        let currentTime = CACurrentMediaTime()
+                        if currentTime - lastProgressUpdate >= progressUpdateInterval {
+                            lastProgressUpdate = currentTime
+                            let progressValue = timestamp / durationTime
+                            Task { @MainActor in
+                                self.progress = progressValue
+                            }
                         }
                     }
                 }
             }
             
             // Processing complete
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self.isProcessing = false
                 
                 // Create trajectory with orientation information
@@ -270,7 +278,7 @@ class HammerTracker: ObservableObject {
         detectHammer(in: imageBuffer, frameNumber: frameNumber, timestamp: timestamp)
         
         // For live view, we store frames and can analyze them later
-        DispatchQueue.main.async {
+        Task { @MainActor in
             self.currentTrajectory = Trajectory(
                 frames: self.trackedFrames,
                 videoOrientation: self.videoOrientation,

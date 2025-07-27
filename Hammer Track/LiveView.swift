@@ -304,9 +304,19 @@ class CameraManager: NSObject, ObservableObject {
     private var videoDeviceInput: AVCaptureDeviceInput?
     private let videoDataOutputQueue = DispatchQueue(label: "VideoDataOutput", qos: .userInitiated, attributes: [], autoreleaseFrequency: .workItem)
     
+    // Background processing queues for threading improvements  
+    private let visionProcessingQueue = DispatchQueue(label: "VisionProcessing", qos: .userInitiated, attributes: .concurrent)
+    private let hammerTrackingQueue = DispatchQueue(label: "HammerTracking", qos: .userInitiated, attributes: .concurrent)
+    
     weak var hammerTracker: HammerTracker?
     private var frameCount = 0
     private var isAnalyzing = false
+    
+    // Frame throttling for performance
+    private var frameProcessingCounter = 0
+    private let frameProcessingInterval = 3 // Process every 3rd frame to reduce load
+    private var lastUIUpdateTime: TimeInterval = 0
+    private let uiUpdateInterval: TimeInterval = 0.2 // Update UI every 200ms max
     
     // Pose Detection
     private var poseRequest: VNDetectHumanBodyPoseRequest?
@@ -325,6 +335,43 @@ class CameraManager: NSObject, ObservableObject {
     
     // Callback for analysis results
     var onAnalysisComplete: ((String) -> Void)?
+    
+    // MARK: - Memory Management Helper
+    private func copyPixelBuffer(_ pixelBuffer: CVPixelBuffer) -> CVPixelBuffer? {
+        let status = CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        guard status == kCVReturnSuccess else { return nil }
+        
+        defer {
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+        }
+        
+        var copyBuffer: CVPixelBuffer?
+        let copyResult = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            CVPixelBufferGetWidth(pixelBuffer),
+            CVPixelBufferGetHeight(pixelBuffer),
+            CVPixelBufferGetPixelFormatType(pixelBuffer),
+            nil,
+            &copyBuffer
+        )
+        
+        guard copyResult == kCVReturnSuccess, let copy = copyBuffer else {
+            return nil
+        }
+        
+        CVPixelBufferLockBaseAddress(copy, [])
+        defer {
+            CVPixelBufferUnlockBaseAddress(copy, [])
+        }
+        
+        let srcBaseAddress = CVPixelBufferGetBaseAddress(pixelBuffer)
+        let dstBaseAddress = CVPixelBufferGetBaseAddress(copy)
+        let dataSize = CVPixelBufferGetDataSize(pixelBuffer)
+        
+        memcpy(dstBaseAddress, srcBaseAddress, dataSize)
+        
+        return copy
+    }
     
     override init() {
         super.init()
@@ -358,24 +405,32 @@ class CameraManager: NSObject, ObservableObject {
             // Check if arm is raised (wrist higher than elbow and elbow higher than shoulder)
             let isArmRaised = rightWrist.y > rightElbow.y && rightElbow.y > rightShoulder.y && rightWrist.confidence > 0.3
             
-            DispatchQueue.main.async {
-                if isArmRaised && !self.isActivelyTracking && self.isAnalyzing {
-                    // Arm is raised
-                    if self.armRaisedStartTime == nil {
-                        self.armRaisedStartTime = Date()
-                        self.isDetectingPose = true
-                        self.poseDetectionStatus = "Arm erkannt - halte Position..."
-                    } else if let startTime = self.armRaisedStartTime,
-                              Date().timeIntervalSince(startTime) >= self.armRaisedThreshold {
-                        // Arm has been raised long enough - start tracking
-                        self.startTrackingHammer()
+            // Throttled UI updates for pose detection
+            let currentTime = CACurrentMediaTime()
+            if currentTime - lastUIUpdateTime >= uiUpdateInterval {
+                lastUIUpdateTime = currentTime
+                
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self = self else { return }
+                        
+                        if isArmRaised && !self.isActivelyTracking && self.isAnalyzing {
+                            // Arm is raised
+                            if self.armRaisedStartTime == nil {
+                                self.armRaisedStartTime = Date()
+                                self.isDetectingPose = true
+                                self.poseDetectionStatus = "Arm erkannt - halte Position..."
+                            } else if let startTime = self.armRaisedStartTime,
+                                      Date().timeIntervalSince(startTime) >= self.armRaisedThreshold {
+                                // Arm has been raised long enough - start tracking
+                                self.startTrackingHammer()
+                            }
+                        } else if !isArmRaised && self.armRaisedStartTime != nil && !self.isActivelyTracking {
+                            // Arm lowered before threshold
+                            self.armRaisedStartTime = nil
+                            self.isDetectingPose = false
+                            self.poseDetectionStatus = "Arm heben zum Start"
+                        }
                     }
-                } else if !isArmRaised && self.armRaisedStartTime != nil && !self.isActivelyTracking {
-                    // Arm lowered before threshold
-                    self.armRaisedStartTime = nil
-                    self.isDetectingPose = false
-                    self.poseDetectionStatus = "Arm heben zum Start"
-                }
             }
             
             self.lastArmPosition = rightWrist
@@ -703,46 +758,78 @@ class CameraManager: NSObject, ObservableObject {
 // AVCaptureVideoDataOutputSampleBufferDelegate for live processing
 extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        
-        frameCount += 1
-        
-        // Run pose detection if analyzing but not actively tracking
-        if isAnalyzing && !isActivelyTracking && poseRequest != nil {
-            let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .right, options: [:])
-            do {
-                try handler.perform([poseRequest!])
-            } catch {
-                print("Failed to perform pose detection: \(error)")
-            }
-        }
-        
-        // Process hammer detection if actively tracking
-        if isActivelyTracking {
-            let previousFrameCount = hammerTracker?.currentTrajectory?.frames.count ?? 0
+        autoreleasepool {
+            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
             
-            // Process frame with hammer tracker
-            hammerTracker?.processLiveFrame(pixelBuffer, frameNumber: frameCount)
+            frameCount += 1
+            frameProcessingCounter += 1
             
-            let currentFrameCount = hammerTracker?.currentTrajectory?.frames.count ?? 0
+            // Frame throttling - only process every 3rd frame for better performance
+            guard frameProcessingCounter >= frameProcessingInterval else { return }
+            frameProcessingCounter = 0
             
-            // Check if hammer was detected in this frame
-            if currentFrameCount > previousFrameCount {
-                // Hammer detected, reset counter
-                consecutiveFramesWithoutHammer = 0
-            } else {
-                // No hammer detected
-                consecutiveFramesWithoutHammer += 1
+            // Run pose detection on background queue if analyzing but not actively tracking
+            if isAnalyzing && !isActivelyTracking && poseRequest != nil {
+                // Copy pixel buffer with better memory management
+                guard let pixelBufferCopy = copyPixelBuffer(pixelBuffer) else { return }
                 
-                DispatchQueue.main.async {
-                    self.framesWithoutHammer = self.consecutiveFramesWithoutHammer
+                visionProcessingQueue.async { [weak self] in
+                    autoreleasepool {
+                        guard let self = self else { return }
+                        
+                        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBufferCopy, orientation: .right, options: [:])
+                        do {
+                            try handler.perform([self.poseRequest!])
+                        } catch {
+                            print("Failed to perform pose detection: \(error)")
+                        }
+                    }
                 }
+            }
+            
+            // Process hammer detection on background queue if actively tracking
+            if isActivelyTracking {
+                guard let pixelBufferCopy = copyPixelBuffer(pixelBuffer) else { return }
+                let currentFrameCount = frameCount
                 
-                // Check if we should stop analysis
-                if consecutiveFramesWithoutHammer >= maxFramesWithoutHammer {
-                    print("No hammer detected for \(maxFramesWithoutHammer) frames, completing analysis")
-                    DispatchQueue.main.async {
-                        self.completeAnalysis()
+                hammerTrackingQueue.async { [weak self] in
+                    autoreleasepool {
+                        guard let self = self else { return }
+                        
+                        let previousFrameCount = self.hammerTracker?.currentTrajectory?.frames.count ?? 0
+                        
+                        // Process frame with hammer tracker
+                        self.hammerTracker?.processLiveFrame(pixelBufferCopy, frameNumber: currentFrameCount)
+                        
+                        let newFrameCount = self.hammerTracker?.currentTrajectory?.frames.count ?? 0
+                        
+                        // Check if hammer was detected in this frame
+                        if newFrameCount > previousFrameCount {
+                            // Hammer detected, reset counter
+                            self.consecutiveFramesWithoutHammer = 0
+                        } else {
+                            // No hammer detected
+                            self.consecutiveFramesWithoutHammer += 1
+                            
+                            // Throttled UI updates for better performance
+                            let currentTime = CACurrentMediaTime()
+                            if currentTime - self.lastUIUpdateTime >= self.uiUpdateInterval {
+                                self.lastUIUpdateTime = currentTime
+                                let currentCount = self.consecutiveFramesWithoutHammer
+                                
+                                DispatchQueue.main.async {
+                                    self.framesWithoutHammer = currentCount
+                                }
+                            }
+                            
+                            // Check if we should stop analysis
+                            if self.consecutiveFramesWithoutHammer >= self.maxFramesWithoutHammer {
+                                print("No hammer detected for \(self.maxFramesWithoutHammer) frames, completing analysis")
+                                DispatchQueue.main.async {
+                                    self.completeAnalysis()
+                                }
+                            }
+                        }
                     }
                 }
             }
