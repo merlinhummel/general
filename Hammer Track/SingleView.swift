@@ -14,10 +14,12 @@ struct SingleView: View {
     
     @StateObject private var hammerTracker = HammerTracker()
     @State private var showTrajectory = true
+    @State private var showTurningPoints = true  // NEU: Toggle für Umkehrpunkte
     @State private var videoSize: CGSize = .zero
     @State private var currentEllipseAngle: Double? = nil
     @State private var currentEllipseIndex: Int? = nil
     @State private var totalEllipses: Int = 0
+    @State private var turningPointVisualizations: [TurningPointVisualization] = []  // NEU
     @Environment(\.presentationMode) var presentationMode
     
     var body: some View {

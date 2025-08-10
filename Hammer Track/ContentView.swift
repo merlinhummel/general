@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct ContentView: View {
+    @State private var showCameraTest = false
+    
     var body: some View {
         NavigationView {
             VStack(spacing: 30) {
@@ -38,6 +40,25 @@ struct ContentView: View {
                             subtitle: "Live-Analyse mit der Kamera",
                             systemImage: "camera"
                         )
+                    }
+                    
+                    // Debug Button für Kamera Test
+                    Button(action: { showCameraTest = true }) {
+                        HStack {
+                            Image(systemName: "wrench.and.screwdriver")
+                                .font(.system(size: 20))
+                                .foregroundColor(.orange)
+                            Text("Kamera Test")
+                                .foregroundColor(.orange)
+                        }
+                        .padding()
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(Color.orange, lineWidth: 2)
+                        )
+                    }
+                    .sheet(isPresented: $showCameraTest) {
+                        CameraTestView()
                     }
                 }
                 .padding(.horizontal, 20)

@@ -309,10 +309,10 @@ class HammerTracker: ObservableObject {
                 return 
             }
             
-            // Debug output every second
-            if frameNumber % 30 == 0 && !results.isEmpty {
-                print("Frame \(frameNumber): Found \(results.count) detections")
-            }
+            // Debug output every second (disabled for performance)
+            // if frameNumber % 30 == 0 && !results.isEmpty {
+            //     print("Frame \(frameNumber): Found \(results.count) detections")
+            // }
             
             // Find the best detection (highest confidence)
             if let bestDetection = results.first(where: { $0.confidence >= self.confidenceThreshold }) {
@@ -636,8 +636,8 @@ class HammerTracker: ObservableObject {
             
             ellipses.append(ellipse)
             
-            // Debug output für jede Ellipse
-            print("Ellipse \(i+1): Start(\(String(format: "%.3f", startPoint.point.x)), \(String(format: "%.3f", startPoint.point.y))) -> End(\(String(format: "%.3f", endPoint.point.x)), \(String(format: "%.3f", endPoint.point.y))) = \(String(format: "%.2f", angle))° \(angle > 0 ? "rechts" : "links")")
+            // Debug output für jede Ellipse (disabled for performance)
+            // print("Ellipse \(i+1): Start(\(String(format: "%.3f", startPoint.point.x)), \(String(format: "%.3f", startPoint.point.y))) -> End(\(String(format: "%.3f", endPoint.point.x)), \(String(format: "%.3f", endPoint.point.y))) = \(String(format: "%.2f", angle))° \(angle > 0 ? "rechts" : "links")")
         }
         
         return ellipses

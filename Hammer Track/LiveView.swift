@@ -2,6 +2,7 @@ import SwiftUI
 import AVFoundation
 import Vision
 import Speech
+import AudioToolbox
 
 struct LiveView: View {
     @StateObject private var cameraManager = CameraManager()
@@ -12,6 +13,10 @@ struct LiveView: View {
     @State private var showFocusIndicator = false
     @State private var focusLocation = CGPoint.zero
     @Environment(\.presentationMode) var presentationMode
+    
+    // Analysis mode selection
+    @State private var showAnalysisOptions = false
+    @State private var selectedAnalysisMode: AnalysisMode = .trajectory
     
     var body: some View {
         VStack(spacing: 0) {
@@ -50,24 +55,42 @@ struct LiveView: View {
             // Main content area with camera
             ZStack {
                 // Camera Preview with tap to focus
-                CameraPreview(session: cameraManager.session, onTap: { location in
-                    focusLocation = location
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showFocusIndicator = true
-                    }
-                    cameraManager.setFocus(at: location)
-                    
-                    // Hide focus indicator after a moment
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                        withAnimation(.easeOut(duration: 0.3)) {
-                            showFocusIndicator = false
+                if cameraManager.isCameraReady {
+                    CameraPreviewFixed(session: cameraManager.session, onTap: { location in
+                        focusLocation = location
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showFocusIndicator = true
+                        }
+                        cameraManager.setFocus(at: location)
+                        
+                        // Hide focus indicator after a moment
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                            withAnimation(.easeOut(duration: 0.3)) {
+                                showFocusIndicator = false
+                            }
+                        }
+                    })
+                    .ignoresSafeArea(edges: .bottom)
+                } else {
+                    // Show loading or black screen with indicator
+                    ZStack {
+                        Color.black
+                            .ignoresSafeArea(edges: .bottom)
+                        
+                        VStack(spacing: 20) {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(1.5)
+                            
+                            Text("Kamera wird initialisiert...")
+                                .foregroundColor(.white)
+                                .font(.caption)
                         }
                     }
-                })
-                    .ignoresSafeArea(edges: .bottom)
+                }
                 
                 // Focus indicator
-                if showFocusIndicator {
+                if showFocusIndicator && cameraManager.isCameraReady {
                     FocusIndicatorView()
                         .position(focusLocation)
                         .allowsHitTesting(false)
@@ -98,6 +121,11 @@ struct LiveView: View {
                                     )
                             }
                         }
+                        
+                        // Show current analysis mode
+                        Text("Modus: \(selectedAnalysisMode.rawValue)")
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.8))
                         
                         if cameraManager.framesWithoutHammer > 0 && cameraManager.isActivelyTracking {
                             Text("Frames ohne Hammer: \(cameraManager.framesWithoutHammer)/7")
@@ -140,7 +168,7 @@ struct LiveView: View {
                 // Bottom Controls
                 VStack(spacing: 20) {
                     if !isAnalysisMode {
-                        Button(action: startAnalysis) {
+                        Button(action: { showAnalysisOptions = true }) {
                             HStack {
                                 Image(systemName: "waveform.path.ecg")
                                     .font(.title2)
@@ -154,6 +182,8 @@ struct LiveView: View {
                             .cornerRadius(25)
                             .shadow(color: Color.black.opacity(0.3), radius: 5, x: 0, y: 3)
                         }
+                        .disabled(!cameraManager.isCameraReady)
+                        .opacity(cameraManager.isCameraReady ? 1.0 : 0.6)
                     } else {
                         VStack(spacing: 15) {
                             // Status indicator
@@ -239,8 +269,11 @@ struct LiveView: View {
         }
         .navigationBarHidden(true)
         .onAppear {
-            cameraManager.checkPermissions()
+            print("📱 LiveView appeared - initializing camera...")
+            
+            // Setup the tracker and analysis mode
             cameraManager.hammerTracker = hammerTracker
+            cameraManager.analysisMode = selectedAnalysisMode
             cameraManager.onAnalysisComplete = { results in
                 self.analysisResultText = results
                 withAnimation {
@@ -254,6 +287,9 @@ struct LiveView: View {
                     }
                 }
             }
+            
+            // Start camera immediately
+            cameraManager.checkPermissions()
         }
         .onDisappear {
             cameraManager.stopSession()
@@ -268,11 +304,32 @@ struct LiveView: View {
         } message: {
             Text("Diese App benötigt Zugriff auf die Kamera für die Live-Analyse.")
         }
+        .overlay(
+            // Analysis Options Modal
+            Group {
+                if showAnalysisOptions {
+                    Color.black.opacity(0.5)
+                        .ignoresSafeArea()
+                        .onTapGesture {
+                            showAnalysisOptions = false
+                        }
+                    
+                    AnalysisOptionsView(
+                        selectedMode: $selectedAnalysisMode,
+                        showOptions: $showAnalysisOptions,
+                        onStart: startAnalysis
+                    )
+                    .transition(.scale.combined(with: .opacity))
+                }
+            }
+            .animation(.spring(), value: showAnalysisOptions)
+        )
     }
     
     private func startAnalysis() {
         withAnimation {
             isAnalysisMode = true
+            cameraManager.analysisMode = selectedAnalysisMode
             cameraManager.startLiveAnalysis()
         }
     }
@@ -286,7 +343,7 @@ struct LiveView: View {
     }
 }
 
-// Camera Manager with Pose Detection
+// Camera Manager with Pose Detection - KRITISCHER FIX VERSION
 class CameraManager: NSObject, ObservableObject {
     @Published var session = AVCaptureSession()
     @Published var showAlert = false
@@ -297,12 +354,19 @@ class CameraManager: NSObject, ObservableObject {
     @Published var framesWithoutHammer = 0
     @Published var currentZoomFactor: CGFloat = 1.0
     @Published var availableZoomFactors: [CGFloat] = [1.0]
+    @Published var isCameraReady = false
+    
+    // Analysis mode
+    var analysisMode: AnalysisMode = .trajectory
     
     private var output = AVCaptureMovieFileOutput()
     private var videoDataOutput = AVCaptureVideoDataOutput()
     private var currentCamera: AVCaptureDevice?
     private var videoDeviceInput: AVCaptureDeviceInput?
     private let videoDataOutputQueue = DispatchQueue(label: "VideoDataOutput", qos: .userInitiated, attributes: [], autoreleaseFrequency: .workItem)
+    
+    // KRITISCH: Dedizierte Queue für alle Session-Operationen
+    private let sessionQueue = DispatchQueue(label: "SessionQueue", qos: .userInitiated)
     
     // Background processing queues for threading improvements  
     private let visionProcessingQueue = DispatchQueue(label: "VisionProcessing", qos: .userInitiated, attributes: .concurrent)
@@ -324,58 +388,22 @@ class CameraManager: NSObject, ObservableObject {
     private var armRaisedStartTime: Date?
     private let armRaisedThreshold: TimeInterval = 0.2 // Arm muss 0.2 Sekunden gehoben bleiben
     
+    // Pose Analyzer for knee angles
+    private let poseAnalyzer = PoseAnalyzer()
+    
     // Analysis tracking
     private var consecutiveFramesWithoutHammer = 0
     private let maxFramesWithoutHammer = 7
     private var analysisStartFrame = 0
     
     // Audio
-    private let audioPlayer = AVAudioPlayer()
     private let speechSynthesizer = AVSpeechSynthesizer()
     
     // Callback for analysis results
     var onAnalysisComplete: ((String) -> Void)?
     
-    // MARK: - Memory Management Helper
-    private func copyPixelBuffer(_ pixelBuffer: CVPixelBuffer) -> CVPixelBuffer? {
-        let status = CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
-        guard status == kCVReturnSuccess else { return nil }
-        
-        defer {
-            CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
-        }
-        
-        var copyBuffer: CVPixelBuffer?
-        let copyResult = CVPixelBufferCreate(
-            kCFAllocatorDefault,
-            CVPixelBufferGetWidth(pixelBuffer),
-            CVPixelBufferGetHeight(pixelBuffer),
-            CVPixelBufferGetPixelFormatType(pixelBuffer),
-            nil,
-            &copyBuffer
-        )
-        
-        guard copyResult == kCVReturnSuccess, let copy = copyBuffer else {
-            return nil
-        }
-        
-        CVPixelBufferLockBaseAddress(copy, [])
-        defer {
-            CVPixelBufferUnlockBaseAddress(copy, [])
-        }
-        
-        let srcBaseAddress = CVPixelBufferGetBaseAddress(pixelBuffer)
-        let dstBaseAddress = CVPixelBufferGetBaseAddress(copy)
-        let dataSize = CVPixelBufferGetDataSize(pixelBuffer)
-        
-        memcpy(dstBaseAddress, srcBaseAddress, dataSize)
-        
-        return copy
-    }
-    
     override init() {
         super.init()
-        setupSession()
         setupPoseDetection()
     }
     
@@ -396,20 +424,42 @@ class CameraManager: NSObject, ObservableObject {
     }
     
     private func processPoseObservation(_ observation: VNHumanBodyPoseObservation) {
-        do {
-            // Get right wrist position (kann auch left wrist nehmen)
-            let rightWrist = try observation.recognizedPoint(.rightWrist)
-            let rightElbow = try observation.recognizedPoint(.rightElbow)
-            let rightShoulder = try observation.recognizedPoint(.rightShoulder)
+        // Process pose for knee angles if needed
+        if analysisMode == .kneeAngle || analysisMode == .both {
+            let poseResult = poseAnalyzer.processPoseObservation(
+                observation, 
+                frameNumber: frameCount, 
+                timestamp: Date().timeIntervalSince1970
+            )
             
-            // Check if arm is raised (wrist higher than elbow and elbow higher than shoulder)
-            let isArmRaised = rightWrist.y > rightElbow.y && rightElbow.y > rightShoulder.y && rightWrist.confidence > 0.3
-            
-            // Throttled UI updates for pose detection
-            let currentTime = CACurrentMediaTime()
-            if currentTime - lastUIUpdateTime >= uiUpdateInterval {
-                lastUIUpdateTime = currentTime
+            // Debug output every 30 frames (disabled for performance)
+            // if frameCount % 30 == 0 && (poseResult.leftKneeAngle != nil || poseResult.rightKneeAngle != nil) {
+            //     print("Knee angles - Left: \(poseResult.leftKneeAngle ?? -1), Right: \(poseResult.rightKneeAngle ?? -1)")
+            // }
+        }
+        
+        // Check for arm raised (for trajectory analysis)
+        if analysisMode == .trajectory || analysisMode == .both {
+            do {
+                // Get right wrist position (kann auch left wrist nehmen)
+                let rightWrist = try observation.recognizedPoint(.rightWrist)
+                let rightElbow = try observation.recognizedPoint(.rightElbow)
+                let rightShoulder = try observation.recognizedPoint(.rightShoulder)
                 
+                // Debug output every 30 frames (disabled for performance)
+                // if frameCount % 30 == 0 {
+                //     print("Pose detection - Wrist: \(rightWrist.y), Elbow: \(rightElbow.y), Shoulder: \(rightShoulder.y), Confidence: \(rightWrist.confidence)")
+                // }
+                
+                // FIXED: In Vision coordinates, Y=0 is top, Y=1 is bottom
+                // So for arm raised: wrist.y < elbow.y < shoulder.y
+                let isArmRaised = rightWrist.y < rightElbow.y && rightElbow.y < rightShoulder.y && rightWrist.confidence > 0.3
+                
+                // Throttled UI updates for pose detection
+                let currentTime = CACurrentMediaTime()
+                if currentTime - lastUIUpdateTime >= uiUpdateInterval {
+                    lastUIUpdateTime = currentTime
+                    
                     DispatchQueue.main.async { [weak self] in
                         guard let self = self else { return }
                         
@@ -419,6 +469,10 @@ class CameraManager: NSObject, ObservableObject {
                                 self.armRaisedStartTime = Date()
                                 self.isDetectingPose = true
                                 self.poseDetectionStatus = "Arm erkannt - halte Position..."
+                                
+                                // Play detection sound
+                                AudioServicesPlaySystemSound(1103) // Tock sound
+                                print("Arm raised detected! Playing sound...")
                             } else if let startTime = self.armRaisedStartTime,
                                       Date().timeIntervalSince(startTime) >= self.armRaisedThreshold {
                                 // Arm has been raised long enough - start tracking
@@ -431,12 +485,13 @@ class CameraManager: NSObject, ObservableObject {
                             self.poseDetectionStatus = "Arm heben zum Start"
                         }
                     }
+                }
+                
+                self.lastArmPosition = rightWrist
+                
+            } catch {
+                // Pose points not available
             }
-            
-            self.lastArmPosition = rightWrist
-            
-        } catch {
-            // Pose points not available
         }
     }
     
@@ -447,82 +502,258 @@ class CameraManager: NSObject, ObservableObject {
         self.consecutiveFramesWithoutHammer = 0
         self.analysisStartFrame = self.frameCount
         
-        // Reset hammer tracker
+        // Reset hammer tracker and pose analyzer
         self.hammerTracker?.resetTracking()
+        self.poseAnalyzer.reset()
         
-        // Play start sound
-        self.playStartSound()
+        // Play start sound - louder and more distinctive
+        AudioServicesPlaySystemSound(1117) // Begin Video Recording sound
         
         print("Started hammer tracking at frame \(self.frameCount)")
     }
-    
-    private func playStartSound() {
-        // System sound for start
-        AudioServicesPlaySystemSound(1113) // Begin recording sound
-    }
+
     
     func checkPermissions() {
+        print("📷 Checking camera permissions...")
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
-            startSession()
+            print("✅ Camera permission already authorized")
+            // Start camera setup immediately
+            self.setupAndStartCamera()
         case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .video) { granted in
+            print("⚠️ Camera permission not determined, requesting...")
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
                 if granted {
+                    print("✅ Camera permission granted by user")
+                    self?.setupAndStartCamera()
+                } else {
+                    print("❌ Camera permission denied by user")
                     DispatchQueue.main.async {
-                        self.startSession()
+                        self?.showAlert = true
+                        self?.isCameraReady = true // Show UI even without permission
                     }
                 }
             }
         case .denied, .restricted:
-            showAlert = true
+            print("❌ Camera permission denied or restricted")
+            DispatchQueue.main.async {
+                self.showAlert = true
+                self.isCameraReady = true // Show UI even without permission
+            }
         @unknown default:
-            break
+            print("❌ Unknown camera permission status")
+            DispatchQueue.main.async {
+                self.showAlert = true
+                self.isCameraReady = true // Show UI even without permission
+            }
         }
     }
     
-    private func setupSession() {
-        session.beginConfiguration()
+    // KRITISCHER FIX: Diese Methode behebt den 1.02s Hang!
+    private func setupAndStartCamera() {
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            print("🔧 Setting up camera session...")
+            
+            // WICHTIG: Setze isCameraReady früh, damit UI nicht blockiert
+            DispatchQueue.main.async {
+                self.isCameraReady = true
+                print("✅ Camera ready flag set early for UI")
+            }
+            
+            // Begin configuration
+            self.session.beginConfiguration()
+            
+            // Remove all existing inputs and outputs
+            self.session.inputs.forEach { self.session.removeInput($0) }
+            self.session.outputs.forEach { self.session.removeOutput($0) }
+            
+            // Set session preset
+            if self.session.canSetSessionPreset(.hd1920x1080) {
+                self.session.sessionPreset = .hd1920x1080
+                print("✅ Session preset set to HD 1920x1080")
+            } else if self.session.canSetSessionPreset(.high) {
+                self.session.sessionPreset = .high
+                print("✅ Session preset set to high")
+            }
+            
+            // Configure camera input
+            if let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) {
+                do {
+                    let input = try AVCaptureDeviceInput(device: camera)
+                    if self.session.canAddInput(input) {
+                        self.session.addInput(input)
+                        self.videoDeviceInput = input
+                        self.currentCamera = camera
+                        print("✅ Camera input added")
+                    }
+                    
+                    // Configure camera settings
+                    try camera.lockForConfiguration()
+                    
+                    // Auto-focus configuration
+                    if camera.isFocusModeSupported(.continuousAutoFocus) {
+                        camera.focusMode = .continuousAutoFocus
+                        print("✅ Continuous auto-focus enabled")
+                    }
+                    
+                    // Auto-exposure configuration
+                    if camera.isExposureModeSupported(.continuousAutoExposure) {
+                        camera.exposureMode = .continuousAutoExposure
+                        print("✅ Continuous auto-exposure enabled")
+                    }
+                    
+                    // Frame rate configuration for smooth performance
+                    let targetFrameRate: Int32 = 30
+                    camera.activeVideoMinFrameDuration = CMTime(value: 1, timescale: targetFrameRate)
+                    camera.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: targetFrameRate)
+                    print("✅ Frame rate set to \(targetFrameRate) FPS")
+                    
+                    camera.unlockForConfiguration()
+                    
+                    // Add video data output
+                    self.videoDataOutput = AVCaptureVideoDataOutput()
+                    self.videoDataOutput.setSampleBufferDelegate(self, queue: self.videoDataOutputQueue)
+                    self.videoDataOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+                    self.videoDataOutput.alwaysDiscardsLateVideoFrames = true
+                    
+                    if self.session.canAddOutput(self.videoDataOutput) {
+                        self.session.addOutput(self.videoDataOutput)
+                        print("✅ Video output added")
+                        
+                        // Configure video connection
+                        if let connection = self.videoDataOutput.connection(with: .video) {
+                            connection.isEnabled = true
+                            
+                            // Set video orientation based on iOS version
+                            if #available(iOS 17.0, *) {
+                                if connection.isVideoRotationAngleSupported(90) {
+                                    connection.videoRotationAngle = 90
+                                    print("✅ Video rotation set to 90 degrees (iOS 17+)")
+                                }
+                            } else {
+                                if connection.isVideoOrientationSupported {
+                                    connection.videoOrientation = .portrait
+                                    print("✅ Video orientation set to portrait")
+                                }
+                            }
+                            
+                            // Ensure connection is active
+                            connection.isEnabled = true
+                            print("✅ Video connection configured and enabled")
+                        }
+                    }
+                } catch {
+                    print("❌ Camera setup error: \(error)")
+                }
+            } else {
+                print("❌ No camera device found - running in Simulator or camera not available")
+                // Still mark as ready to show UI even without camera
+                DispatchQueue.main.async {
+                    self.isCameraReady = true
+                    self.poseDetectionStatus = "Keine Kamera verfügbar"
+                }
+            }
+            
+            // Commit configuration
+            self.session.commitConfiguration()
+            print("✅ Session configuration committed")
+            
+            // Update zoom factors
+            self.updateAvailableZoomFactors()
+            
+            // KRITISCHER FIX: Session Start auf separatem Thread!
+            // Dies verhindert den Deadlock und den 1.02s Hang
+            DispatchQueue.global(qos: .userInitiated).async {
+                print("🚀 Starting session on userInitiated queue...")
+                
+                // Session sofort starten
+                self.session.startRunning()
+                
+                // Verify status und update UI
+                DispatchQueue.main.async {
+                    let isRunning = self.session.isRunning
+                    print(isRunning ? "✅ Session is running successfully!" : "⚠️ Session failed to start")
+                    
+                    // Update camera ready status based on actual running state
+                    if isRunning {
+                        self.isCameraReady = true
+                        print("✅ Camera fully operational")
+                    } else {
+                        // Retry once if failed
+                        print("⚠️ Retrying session start...")
+                        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.3) {
+                            self.session.startRunning()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                                if self.session.isRunning {
+                                    print("✅ Session started on retry!")
+                                    self.isCameraReady = true
+                                } else {
+                                    print("❌ Session failed to start after retry")
+                                    // Still set ready to show UI, even if preview is black
+                                    self.isCameraReady = true
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    func startSession() {
+        print("🚀 Starting camera session manually...")
         
-        // Add video input
-        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
+        guard !session.isRunning else {
+            print("✅ Session already running")
+            DispatchQueue.main.async {
+                self.isCameraReady = true
+            }
             return
         }
         
-        currentCamera = camera
-        
-        do {
-            let input = try AVCaptureDeviceInput(device: camera)
-            
-            if session.canAddInput(input) {
-                session.addInput(input)
-                videoDeviceInput = input
-            }
-            
-            // Add movie output for recording
-            if session.canAddOutput(output) {
-                session.addOutput(output)
-            }
-            
-            // Add video data output for live processing
-            videoDataOutput.setSampleBufferDelegate(self, queue: videoDataOutputQueue)
-            videoDataOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
-            
-            if session.canAddOutput(videoDataOutput) {
-                session.addOutput(videoDataOutput)
-            }
-            
-        } catch {
-            print("Error setting up camera: \(error)")
+        // Set ready flag early for UI
+        DispatchQueue.main.async {
+            self.isCameraReady = true
         }
         
-        session.commitConfiguration()
-        
-        // Setup available zoom factors
-        updateAvailableZoomFactors()
+        // Start session on appropriate queue
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            self.session.startRunning()
+            
+            DispatchQueue.main.async {
+                if self.session.isRunning {
+                    print("✅ Camera session started successfully")
+                } else {
+                    print("⚠️ Camera session failed to start")
+                }
+            }
+        }
     }
     
-    // MARK: - Focus and Zoom Methods
+    func stopSession() {
+        print("📴 Stopping camera session...")
+        
+        DispatchQueue.main.async {
+            self.isCameraReady = false
+        }
+        
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            if self.session.isRunning {
+                self.session.stopRunning()
+                print("✅ Camera session stopped successfully")
+            } else {
+                print("⚠️ Session was not running")
+            }
+        }
+    }
     
+    // Rest of the methods remain the same...
     func setFocus(at point: CGPoint) {
         guard let device = currentCamera else { return }
         
@@ -548,26 +779,9 @@ class CameraManager: NSObject, ObservableObject {
     func setZoomFactor(_ factor: CGFloat) {
         guard let device = currentCamera else { return }
         
-        // For 0.5x, try to switch to ultra-wide camera
-        if factor == 0.5 {
-            if let ultraWide = AVCaptureDevice.default(.builtInUltraWideCamera, for: .video, position: .back) {
-                switchToCamera(ultraWide)
-                currentZoomFactor = factor
-                return
-            }
-        }
-        
-        // For standard zoom levels, use the wide camera with zoom
-        if let wideCamera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) {
-            if device != wideCamera {
-                switchToCamera(wideCamera)
-            }
-        }
-        
         do {
             try device.lockForConfiguration()
             
-            // Clamp the zoom factor to device limits
             let clampedFactor = max(device.minAvailableVideoZoomFactor, 
                                    min(factor, device.maxAvailableVideoZoomFactor))
             
@@ -579,66 +793,21 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
     
-    private func switchToCamera(_ newCamera: AVCaptureDevice) {
-        session.beginConfiguration()
-        
-        // Remove current input
-        if let currentInput = videoDeviceInput {
-            session.removeInput(currentInput)
-        }
-        
-        // Add new input
-        do {
-            let newInput = try AVCaptureDeviceInput(device: newCamera)
-            if session.canAddInput(newInput) {
-                session.addInput(newInput)
-                videoDeviceInput = newInput
-                currentCamera = newCamera
-            }
-        } catch {
-            print("Error switching camera for zoom: \(error)")
-        }
-        
-        session.commitConfiguration()
-    }
-    
     private func updateAvailableZoomFactors() {
         guard let device = currentCamera else { return }
         
-        var factors: [CGFloat] = []
+        var factors: [CGFloat] = [1.0]
         
-        // Check for ultra wide camera (0.5x)
-        if let _ = AVCaptureDevice.default(.builtInUltraWideCamera, for: .video, position: .back) {
-            factors.append(0.5)
-        }
-        
-        // Standard wide camera (1.0x)
-        factors.append(1.0)
-        
-        // Check for telephoto camera or zoom capability
         if device.maxAvailableVideoZoomFactor >= 2.0 {
             factors.append(2.0)
         }
         
-        // Some devices have 3x zoom
         if device.maxAvailableVideoZoomFactor >= 3.0 {
             factors.append(3.0)
         }
         
         DispatchQueue.main.async {
             self.availableZoomFactors = factors
-        }
-    }
-    
-    func startSession() {
-        DispatchQueue.global(qos: .userInitiated).async {
-            self.session.startRunning()
-        }
-    }
-    
-    func stopSession() {
-        DispatchQueue.global(qos: .userInitiated).async {
-            self.session.stopRunning()
         }
     }
     
@@ -649,6 +818,7 @@ class CameraManager: NSObject, ObservableObject {
         isActivelyTracking = false
         armRaisedStartTime = nil
         hammerTracker?.resetTracking()
+        poseAnalyzer.reset()
         
         DispatchQueue.main.async {
             self.poseDetectionStatus = "Arm heben zum Start"
@@ -670,35 +840,39 @@ class CameraManager: NSObject, ObservableObject {
         isActivelyTracking = false
         armRaisedStartTime = nil
         
-        // Perform trajectory analysis
-        if let analysis = hammerTracker?.analyzeTrajectory() {
-            let resultsText = formatAnalysisResults(analysis)
-            
-            DispatchQueue.main.async {
-                self.poseDetectionStatus = "Analyse abgeschlossen"
-                self.onAnalysisComplete?(resultsText)
-                
-                // Speak results
-                self.speakResults(resultsText)
-                
-                // Reset for next detection
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                    self.poseDetectionStatus = "Arm heben zum Start"
-                    self.hammerTracker?.resetTracking()
-                }
+        var resultsText = ""
+        
+        if analysisMode == .trajectory || analysisMode == .both {
+            if let analysis = hammerTracker?.analyzeTrajectory() {
+                resultsText += formatAnalysisResults(analysis)
+            } else {
+                resultsText += "Keine vollständige Trajektorie erkannt.\n"
             }
-        } else {
-            DispatchQueue.main.async {
-                self.poseDetectionStatus = "Keine vollständige Trajektorie erkannt"
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                    self.poseDetectionStatus = "Arm heben zum Start"
-                }
+        }
+        
+        if analysisMode == .kneeAngle || analysisMode == .both {
+            if analysisMode == .both {
+                resultsText += "\n\n"
+            }
+            resultsText += poseAnalyzer.formatKneeAngleResults()
+        }
+        
+        DispatchQueue.main.async {
+            self.poseDetectionStatus = "Analyse abgeschlossen"
+            self.onAnalysisComplete?(resultsText)
+            
+            self.speakResults(resultsText)
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                self.poseDetectionStatus = "Arm heben zum Start"
+                self.hammerTracker?.resetTracking()
+                self.poseAnalyzer.reset()
             }
         }
     }
     
     private func formatAnalysisResults(_ analysis: TrajectoryAnalysis) -> String {
-        var results = ""
+        var results = "Trajektorien-Analyse:\n\n"
         
         for (index, ellipse) in analysis.ellipses.enumerated() {
             let direction = ellipse.angle > 0 ? "rechts" : "links"
@@ -721,25 +895,21 @@ class CameraManager: NSObject, ObservableObject {
     
     func toggleFlash() {
         flashMode = flashMode == .off ? .on : .off
-        // Configure flash for photo capture (would need photo output for actual implementation)
     }
     
     func switchCamera() {
         session.beginConfiguration()
         
-        // Remove current input
         if let input = videoDeviceInput {
             session.removeInput(input)
         }
         
-        // Get new camera
         let position: AVCaptureDevice.Position = currentCamera?.position == .back ? .front : .back
         guard let newCamera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) else {
             session.commitConfiguration()
             return
         }
         
-        // Add new input
         do {
             let newInput = try AVCaptureDeviceInput(device: newCamera)
             if session.canAddInput(newInput) {
@@ -752,83 +922,69 @@ class CameraManager: NSObject, ObservableObject {
         }
         
         session.commitConfiguration()
+        updateAvailableZoomFactors()
     }
 }
 
-// AVCaptureVideoDataOutputSampleBufferDelegate for live processing
+// Extension for AVCaptureVideoDataOutputSampleBufferDelegate
 extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        autoreleasepool {
-            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-            
-            frameCount += 1
-            frameProcessingCounter += 1
-            
-            // Frame throttling - only process every 3rd frame for better performance
-            guard frameProcessingCounter >= frameProcessingInterval else { return }
-            frameProcessingCounter = 0
-            
-            // Run pose detection on background queue if analyzing but not actively tracking
-            if isAnalyzing && !isActivelyTracking && poseRequest != nil {
-                // Copy pixel buffer with better memory management
-                guard let pixelBufferCopy = copyPixelBuffer(pixelBuffer) else { return }
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        
+        frameCount += 1
+        frameProcessingCounter += 1
+        
+        if frameCount % 30 == 0 {
+            print("Frame \(frameCount) received. Analyzing: \(isAnalyzing), Tracking: \(isActivelyTracking)")
+        }
+        
+        guard frameProcessingCounter >= frameProcessingInterval else { return }
+        frameProcessingCounter = 0
+        
+        if isAnalyzing && poseRequest != nil {
+            visionProcessingQueue.async { [weak self] in
+                guard let self = self else { return }
                 
-                visionProcessingQueue.async { [weak self] in
-                    autoreleasepool {
-                        guard let self = self else { return }
-                        
-                        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBufferCopy, orientation: .right, options: [:])
-                        do {
-                            try handler.perform([self.poseRequest!])
-                        } catch {
-                            print("Failed to perform pose detection: \(error)")
-                        }
-                    }
+                let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .right, options: [:])
+                do {
+                    try handler.perform([self.poseRequest!])
+                } catch {
+                    print("Failed to perform pose detection: \(error)")
                 }
             }
+        }
+        
+        if isActivelyTracking && (analysisMode == .trajectory || analysisMode == .both) {
+            let currentFrameCount = frameCount
             
-            // Process hammer detection on background queue if actively tracking
-            if isActivelyTracking {
-                guard let pixelBufferCopy = copyPixelBuffer(pixelBuffer) else { return }
-                let currentFrameCount = frameCount
+            hammerTrackingQueue.async { [weak self] in
+                guard let self = self else { return }
                 
-                hammerTrackingQueue.async { [weak self] in
-                    autoreleasepool {
-                        guard let self = self else { return }
+                let previousFrameCount = self.hammerTracker?.currentTrajectory?.frames.count ?? 0
+                
+                self.hammerTracker?.processLiveFrame(pixelBuffer, frameNumber: currentFrameCount)
+                
+                let newFrameCount = self.hammerTracker?.currentTrajectory?.frames.count ?? 0
+                
+                if newFrameCount > previousFrameCount {
+                    self.consecutiveFramesWithoutHammer = 0
+                } else {
+                    self.consecutiveFramesWithoutHammer += 1
+                    
+                    let currentTime = CACurrentMediaTime()
+                    if currentTime - self.lastUIUpdateTime >= self.uiUpdateInterval {
+                        self.lastUIUpdateTime = currentTime
+                        let currentCount = self.consecutiveFramesWithoutHammer
                         
-                        let previousFrameCount = self.hammerTracker?.currentTrajectory?.frames.count ?? 0
-                        
-                        // Process frame with hammer tracker
-                        self.hammerTracker?.processLiveFrame(pixelBufferCopy, frameNumber: currentFrameCount)
-                        
-                        let newFrameCount = self.hammerTracker?.currentTrajectory?.frames.count ?? 0
-                        
-                        // Check if hammer was detected in this frame
-                        if newFrameCount > previousFrameCount {
-                            // Hammer detected, reset counter
-                            self.consecutiveFramesWithoutHammer = 0
-                        } else {
-                            // No hammer detected
-                            self.consecutiveFramesWithoutHammer += 1
-                            
-                            // Throttled UI updates for better performance
-                            let currentTime = CACurrentMediaTime()
-                            if currentTime - self.lastUIUpdateTime >= self.uiUpdateInterval {
-                                self.lastUIUpdateTime = currentTime
-                                let currentCount = self.consecutiveFramesWithoutHammer
-                                
-                                DispatchQueue.main.async {
-                                    self.framesWithoutHammer = currentCount
-                                }
-                            }
-                            
-                            // Check if we should stop analysis
-                            if self.consecutiveFramesWithoutHammer >= self.maxFramesWithoutHammer {
-                                print("No hammer detected for \(self.maxFramesWithoutHammer) frames, completing analysis")
-                                DispatchQueue.main.async {
-                                    self.completeAnalysis()
-                                }
-                            }
+                        DispatchQueue.main.async {
+                            self.framesWithoutHammer = currentCount
+                        }
+                    }
+                    
+                    if self.consecutiveFramesWithoutHammer >= self.maxFramesWithoutHammer {
+                        print("No hammer detected for \(self.maxFramesWithoutHammer) frames, completing analysis")
+                        DispatchQueue.main.async {
+                            self.completeAnalysis()
                         }
                     }
                 }
@@ -837,44 +993,48 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     }
 }
 
-// Camera Preview with tap to focus
-struct CameraPreview: UIViewRepresentable {
+// Rest of the UI components remain the same...
+struct CameraPreviewFixed: UIViewRepresentable {
     let session: AVCaptureSession
     let onTap: ((CGPoint) -> Void)?
     
-    init(session: AVCaptureSession, onTap: ((CGPoint) -> Void)? = nil) {
-        self.session = session
-        self.onTap = onTap
-    }
-    
     func makeUIView(context: Context) -> UIView {
-        let view = UIView(frame: .zero)
-        
-        // Add tap gesture
-        let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(context.coordinator.handleTap(_:)))
-        view.addGestureRecognizer(tapGesture)
+        print("🎥 Creating camera preview view...")
+        let view = CameraPreviewView()
+        view.backgroundColor = .black
         
         let previewLayer = AVCaptureVideoPreviewLayer(session: session)
         previewLayer.videoGravity = .resizeAspectFill
-        previewLayer.connection?.videoRotationAngle = 90.0
         
-        view.layer.addSublayer(previewLayer)
-        
-        // Store preview layer reference
-        context.coordinator.previewLayer = previewLayer
-        
-        DispatchQueue.main.async {
-            previewLayer.frame = view.bounds
+        // Ensure connection is properly configured
+        if let connection = previewLayer.connection {
+            connection.isEnabled = true
+            if connection.isVideoOrientationSupported {
+                connection.videoOrientation = .portrait
+            }
+            print("✅ Preview layer connection configured")
+        } else {
+            print("⚠️ No preview layer connection available yet")
         }
         
+        view.layer.addSublayer(previewLayer)
+        view.previewLayer = previewLayer
+        context.coordinator.previewLayer = previewLayer
+        
+        // Add tap gesture for focus
+        let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(context.coordinator.handleTap(_:)))
+        view.addGestureRecognizer(tapGesture)
+        
+        print("✅ Camera preview view created successfully")
         return view
     }
     
     func updateUIView(_ uiView: UIView, context: Context) {
-        if let layer = uiView.layer.sublayers?.first as? AVCaptureVideoPreviewLayer {
-            DispatchQueue.main.async {
-                layer.frame = uiView.bounds
-            }
+        // Check if session is running when view updates
+        if session.isRunning {
+            print("✅ Session is running in preview update")
+        } else {
+            print("⚠️ Session not running in preview update")
         }
     }
     
@@ -893,30 +1053,25 @@ struct CameraPreview: UIViewRepresentable {
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
             let location = gesture.location(in: gesture.view)
             
-            // Convert to device coordinates if preview layer exists
             if let previewLayer = previewLayer {
                 let devicePoint = previewLayer.captureDevicePointConverted(fromLayerPoint: location)
-                // Pass the UI location for the indicator
                 onTap?(location)
-                
-                // Find camera manager through responder chain and set focus
-                if let window = gesture.view?.window,
-                   let rootViewController = window.rootViewController,
-                   let cameraManager = findCameraManager(in: rootViewController) {
-                    cameraManager.setFocus(at: devicePoint)
-                }
             } else {
                 onTap?(location)
             }
         }
-        
-        private func findCameraManager(in viewController: UIViewController) -> CameraManager? {
-            // This is a simplified approach - in production, you'd use a proper delegate pattern
-            return nil
-        }
     }
 }
-// Focus Indicator View
+
+class CameraPreviewView: UIView {
+    var previewLayer: AVCaptureVideoPreviewLayer?
+    
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        previewLayer?.frame = bounds
+    }
+}
+
 struct FocusIndicatorView: View {
     @State private var animating = false
     
