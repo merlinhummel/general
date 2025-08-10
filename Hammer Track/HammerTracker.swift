@@ -7,7 +7,7 @@ import CoreGraphics
 
 // MARK: - Data Models
 struct TrackedFrame {
-    let frameNumber: Int
+    let frameNumber: Int      // Original video frame number
     let boundingBox: CGRect
     let confidence: Float
     let timestamp: TimeInterval
@@ -89,7 +89,7 @@ struct Trajectory {
 }
 
 struct TurningPoint {
-    let frameIndex: Int
+    let frameIndex: Int      // Index in trackedFrames array (NOT video frame number)
     let point: CGPoint
     let isMaximum: Bool
 }
@@ -120,6 +120,8 @@ class HammerTracker: ObservableObject {
     // Tracking data
     private var trackedFrames: [TrackedFrame] = []
     private let confidenceThreshold: Float = 0.3
+    private var lastDetectedFrameNumber: Int = -1  // Für 15-Frame-Gap Regel
+    private let maxFramesWithoutDetection = 15     // Nach 15 Frames ohne Detection beenden
     
     // Frame processing with optimized queues
     private let processingQueue = DispatchQueue(label: "com.hammertrack.processing", qos: .userInitiated, attributes: .concurrent)
@@ -296,6 +298,13 @@ class HammerTracker: ObservableObject {
             return 
         }
         
+        // Check 15-frame gap rule
+        if lastDetectedFrameNumber >= 0 && frameNumber - lastDetectedFrameNumber > maxFramesWithoutDetection {
+            print("15 Frames ohne Detection - Analyse beendet bei Frame \(frameNumber)")
+            // Signal that processing should stop (could set a flag here)
+            return
+        }
+        
         let request = VNCoreMLRequest(model: model) { [weak self] request, error in
             guard let self = self else { return }
             
@@ -315,7 +324,8 @@ class HammerTracker: ObservableObject {
             // }
             
             // Find the best detection (highest confidence)
-            if let bestDetection = results.first(where: { $0.confidence >= self.confidenceThreshold }) {
+            if let bestDetection = results.max(by: { $0.confidence < $1.confidence }),
+               bestDetection.confidence >= self.confidenceThreshold {
                 let boundingBox = bestDetection.boundingBox
                 
                 // When using videoOrientation in the handler, we should get
@@ -329,6 +339,7 @@ class HammerTracker: ObservableObject {
                 )
                 
                 self.trackedFrames.append(trackedFrame)
+                self.lastDetectedFrameNumber = frameNumber  // Update last detection
                 
                 if frameNumber % 30 == 0 {
                     print("\n=== Frame \(frameNumber) ===")
@@ -482,6 +493,14 @@ class HammerTracker: ObservableObject {
             let secondPoint = turningPoints[i + 1] // Punkt 2 der Trajektorie  
             let thirdPoint = turningPoints[i + 2]  // Punkt 3 der Trajektorie (wird zu Punkt 1 der nächsten)
             
+            // Sicherheitsprüfung für Array-Zugriffe
+            guard firstPoint.frameIndex >= 0 && 
+                  thirdPoint.frameIndex < trackedFrames.count &&
+                  firstPoint.frameIndex <= thirdPoint.frameIndex else {
+                print("Warnung: Ungültige frameIndex Werte für Ellipse \(i+1)")
+                continue
+            }
+            
             // Berechne Winkel zwischen erstem und zweitem Punkt
             let angle = calculateEllipseAngleWithPythagoras(
                 startPoint: firstPoint.point, 
@@ -514,21 +533,26 @@ class HammerTracker: ObservableObject {
         var currentDirection: Int? = nil
         
         // Verbesserte Parameter für stabilere Erkennung
-        let minConsistentFrames = 10  // Mindestens 10 konsistente Frames
+        let minConsistentFrames = 7  // Wie in der Spezifikation: 7 konsistente Frames
         let minMovementThreshold = 0.015  // Erhöht von 0.01 auf 0.015
         
-        // Find the first valid starting point
+        // Find the first valid starting point with frame-to-frame comparison
         var startIndex = 0
         for i in 0..<(trackedFrames.count - minConsistentFrames) {
-            let startX = trackedFrames[i].boundingBox.midX
             var consistent = true
             var direction = 0
             
-            // Check if next frames go consistently in one direction
-            for j in 1...minConsistentFrames {
-                if i + j >= trackedFrames.count { break }
-                let currentX = trackedFrames[i + j].boundingBox.midX
-                let diff = currentX - startX
+            // Check if next 7 frames go consistently in one direction (frame-to-frame)
+            for j in 0..<minConsistentFrames {
+                if i + j + 1 >= trackedFrames.count { 
+                    consistent = false
+                    break 
+                }
+                
+                // Frame-zu-Frame Differenz berechnen
+                let currentX = trackedFrames[i + j + 1].boundingBox.midX
+                let previousX = trackedFrames[i + j].boundingBox.midX
+                let diff = currentX - previousX
                 
                 if abs(diff) < minMovementThreshold {
                     consistent = false
@@ -556,7 +580,7 @@ class HammerTracker: ObservableObject {
                     point: point,
                     isMaximum: direction < 0
                 ))
-                print("Startpunkt gefunden bei Frame \(i): Richtung \(direction > 0 ? "rechts" : "links")")
+                print("Startpunkt gefunden bei Frame \(i): Richtung \(direction > 0 ? "rechts" : "links") (7 konsistente Frames)")
                 break
             }
         }
@@ -566,9 +590,18 @@ class HammerTracker: ObservableObject {
         let minFramesBetweenTurns = 15  // Mindestabstand zwischen Umkehrpunkten
         
         for i in (startIndex + 1)..<trackedFrames.count {
+            // Check for detection gaps (15 frames without detection)
+            if i > 0 {
+                let frameGap = trackedFrames[i].frameNumber - trackedFrames[i-1].frameNumber
+                if frameGap > 15 {  // Use literal value 15 for max frames without detection
+                    print("Detection-Gap von \(frameGap) Frames erkannt bei Frame \(trackedFrames[i].frameNumber), Analyse beendet")
+                    break
+                }
+            }
+            
             // Check for time jumps (skip if too much time passed)
-            if i > 0 && trackedFrames[i].timestamp - trackedFrames[i-1].timestamp > 15.0/30.0 {
-                print("Zeitsprung erkannt bei Frame \(i), Analyse beendet")
+            if i > 0 && trackedFrames[i].timestamp - trackedFrames[i-1].timestamp > 0.5 {
+                print("Zeitsprung erkannt bei Frame \(trackedFrames[i].frameNumber), Analyse beendet")
                 break
             }
             
@@ -643,37 +676,37 @@ class HammerTracker: ObservableObject {
         return ellipses
     }
     
-    /// Berechnet den Ellipsenwinkel mit Pythagoras
+    /// Berechnet den Ellipsenwinkel mit atan2 (robuster)
     /// - Parameters:
     ///   - startPoint: Erster Umkehrpunkt der Trajektorie
     ///   - endPoint: Zweiter Umkehrpunkt der Trajektorie
-    /// - Returns: Winkel in Grad (positiv = fällt nach rechts, negativ = fällt nach links)
+    /// - Returns: Winkel in Grad (positiv = fällt nach links, negativ = fällt nach rechts)
+    ///           Entsprechend der Spezifikation: "Wenn der erste punkt höher liegt als der zweite fällt die elypse nach links"
     private func calculateEllipseAngleWithPythagoras(startPoint: CGPoint, endPoint: CGPoint) -> Double {
-        // Abstände berechnen
-        let horizontalDistance = abs(endPoint.x - startPoint.x)  // Ankathete
-        let verticalDistance = abs(endPoint.y - startPoint.y)    // Gegenkathete
+        // Berechne die Differenzen (mit Vorzeichen)
+        let dx = endPoint.x - startPoint.x
+        let dy = endPoint.y - startPoint.y
         
-        // Prüfe auf gültigen horizontalen Abstand
-        guard horizontalDistance > 0.001 else {
-            return 0.0 // Vertikale Linie, kein Winkel
+        // Prüfe auf minimale Bewegung
+        guard abs(dx) > 0.001 || abs(dy) > 0.001 else {
+            return 0.0 // Keine Bewegung
         }
         
-        // Hypothenuse mit Pythagoras: c² = a² + b²
-        let hypotenuse = sqrt(horizontalDistance * horizontalDistance + verticalDistance * verticalDistance)
-        
-        // Winkel berechnen: sin(angle) = Gegenkathete / Hypothenuse
-        let angleRadians = asin(verticalDistance / hypotenuse)
+        // Verwende atan2 für robusten signierten Winkel
+        // atan2(dy, dx) gibt den Winkel von der x-Achse aus
+        let angleRadians = atan2(abs(dy), abs(dx))
         let angleDegrees = angleRadians * 180.0 / .pi
         
-        // Richtung bestimmen: Welcher Punkt ist höher?
+        // Richtung bestimmen basierend auf der Spezifikation:
         // In normalisierten Koordinaten: Y=0 ist unten, Y=1 ist oben
-        let isStartPointHigher = startPoint.y > endPoint.y
+        // Wenn startPoint.y > endPoint.y: Erster Punkt höher → fällt nach links → positiver Winkel
+        // Wenn startPoint.y < endPoint.y: Erster Punkt tiefer → fällt nach rechts → negativer Winkel
         
-        if isStartPointHigher {
-            // Erster Punkt höher → Trajektorie fällt nach rechts → positiver Winkel
+        if startPoint.y > endPoint.y {
+            // Erster Punkt höher → Trajektorie fällt nach links → positiver Winkel (laut Spec)
             return angleDegrees
         } else {
-            // Zweiter Punkt höher → Trajektorie fällt nach links → negativer Winkel
+            // Erster Punkt tiefer → Trajektorie fällt nach rechts → negativer Winkel
             return -angleDegrees
         }
     }
@@ -685,6 +718,7 @@ class HammerTracker: ObservableObject {
         analysisResult = nil
         progress = 0.0
         isProcessing = true
+        lastDetectedFrameNumber = -1  // Reset last detection tracker
     }
     
     func getTrajectoryForDisplay(videoSize: CGSize, displaySize: CGSize) -> [CGPoint] {
