@@ -1,120 +1,117 @@
-# Hammer Track - iOS Trajectory Analysis App
+# HammerTrack
 
-## Überblick
-Hammer Track ist eine iOS-App zur Analyse von Hammerwurf-Trajektorien mittels Computer Vision und Machine Learning. Die App erkennt automatisch einen Hammer in Videos und visualisiert dessen Flugbahn.
+iOS-App zur Analyse von Hammerwurf-Bewegungen mit Computer Vision und Machine Learning.
 
-## Hauptfunktionen
-- **Echtzeit-Hammerkennung**: Verwendet ein trainiertes CoreML-Modell zur Objekterkennung
-- **Trajektorien-Visualisierung**: Zeichnet die Flugbahn des Hammers über das Video
-- **Ellipsen-Analyse**: Erkennt und analysiert die elliptischen Bewegungsmuster
-- **Video-Vergleich**: Vergleicht zwei Videos nebeneinander
-- **Live-Kamera-Unterstützung**: Analyse in Echtzeit mit der Gerätekamera
+## Projektstruktur
 
-## Technische Architektur
-
-### Core ML Model
-- **Datei**: `best.mlpackage`
-- **Typ**: YOLO-basiertes Objekterkennungsmodell
-- **Klasse**: Erkennt "Hammer" mit Konfidenzwerten
-- **Input**: Video-Frames (CVPixelBuffer)
-- **Output**: Bounding Boxes mit Koordinaten und Konfidenz
-
-### Hauptkomponenten
-
-#### HammerTracker.swift
-Die zentrale Klasse für die Hammererkennung und Trajektorienanalyse:
-- `processVideo(url:)`: Verarbeitet ein Video Frame für Frame
-- `detectHammer(in:frameNumber:timestamp:)`: Führt die ML-Erkennung durch
-- `analyzeTrajectory()`: Analysiert die Trajektorie und findet Ellipsen
-- Verwendet VNCoreMLRequest für die Integration des ML-Modells
-
-#### Views
-1. **ContentView.swift**: Tab-basierte Navigation
-2. **SingleView.swift**: Einzelvideo-Analyse
-3. **CompareView.swift**: Vergleich zweier Videos
-4. **LiveView.swift**: Echtzeit-Kameraanalyse
-5. **ZoomableVideoView.swift**: Video-Player mit Zoom und Trajektorien-Overlay
-6. **TrajectoryView.swift**: Zeichnet die Trajektorien-Pfade
-
-### Koordinaten-Transformation
-**Wichtig**: iOS-Videos sind oft um 90° gedreht. Die App kompensiert dies:
-- Video-Orientierung wird erkannt (`.right` = 90° CW)
-- Koordinaten werden in `ZoomableVideoView` transformiert
-- Transformation: Für 90° CCW: `new_x = 1 - old_y, new_y = old_x`
-
-## Setup für Entwickler
-
-### Voraussetzungen
-- Xcode 14.0+
-- iOS 16.0+ Deployment Target
-- Swift 5.0+
-
-### Installation
-1. Clone das Repository
-2. Öffne `Hammer Track.xcodeproj` in Xcode
-3. Stelle sicher, dass `best.mlpackage` im Projekt enthalten ist
-4. Build und Run (Cmd+R)
-
-### Projekt-Struktur
 ```
 HammerTrack/
-├── Hammer Track.xcodeproj/
-├── Hammer Track/
-│   ├── Assets.xcassets/
-│   ├── best.mlpackage/          # ML Model
-│   ├── Hammer_TrackApp.swift    # App Entry Point
-│   ├── HammerTracker.swift      # Core Logic
-│   ├── ContentView.swift        # Main Navigation
-│   ├── SingleView.swift         # Single Video Analysis
-│   ├── CompareView.swift        # Video Comparison
-│   ├── LiveView.swift           # Live Camera
-│   ├── ZoomableVideoView.swift  # Video Player
-│   └── TrajectoryView.swift     # Trajectory Drawing
-├── Hammer TrackTests/
-└── Hammer TrackUITests/
+├── HammerTrack/                    # Hauptprojekt
+│   ├── App/                        # App-Einstiegspunkt
+│   │   └── Hammer_TrackApp.swift   # Main App Entry Point
+│   │
+│   ├── Views/                      # UI-Komponenten
+│   │   ├── Screens/                # Haupt-Bildschirme
+│   │   │   ├── ContentView.swift   # Home Screen
+│   │   │   ├── LiveView.swift      # Live-Analyse
+│   │   │   ├── SingleView.swift    # Einzelanalyse
+│   │   │   ├── CompareView.swift   # Vergleichsansicht
+│   │   │   └── CameraTestView.swift # Kamera-Test
+│   │   │
+│   │   └── Components/             # Wiederverwendbare UI-Komponenten
+│   │       ├── TrajectoryView.swift
+│   │       ├── SimpleTrajectoryView.swift
+│   │       ├── TurningPointsOverlay.swift
+│   │       ├── EllipseInfoView.swift
+│   │       ├── ZoomableVideoView.swift
+│   │       └── AnalysisOptionsView.swift
+│   │
+│   ├── ViewModels/                 # MVVM ViewModels (für zukünftige Verwendung)
+│   │
+│   ├── Models/                     # Datenmodelle (für zukünftige Verwendung)
+│   │
+│   ├── Services/                   # Business Logic & Services
+│   │   ├── HammerTracker.swift     # Hammer-Tracking-Logik
+│   │   └── PoseAnalyzer.swift      # Pose-Detection-Service
+│   │
+│   ├── Utilities/                  # Helper-Funktionen & Extensions
+│   │   ├── RobustTurningPointDetection.swift
+│   │   └── TrackingConfigurationOptions.swift
+│   │
+│   ├── Extensions/                 # Swift Extensions (für zukünftige Verwendung)
+│   │
+│   ├── Config/                     # Konfigurationsdateien
+│   │   ├── ProjectConfiguration.swift
+│   │   ├── ExportOptions.plist
+│   │   └── Hammer-Track-Info.plist
+│   │
+│   └── Resources/                  # Assets & ML-Modelle
+│       ├── Assets.xcassets/        # App Icons, Images
+│       └── best.mlpackage/         # CoreML Model
+│
+├── HammerTrack.xcodeproj/          # Xcode Projektdatei
+├── docs/                           # Dokumentation
+│   ├── README.md
+│   ├── AppStore_Metadata.md
+│   ├── CHANGES_SUMMARY.md
+│   └── IMPLEMENTED_FIXES.md
+│
+└── scripts/                        # Build & Deployment Scripts
+    ├── build_for_appstore.sh
+    ├── testflight_setup.sh
+    └── generate_app_icons.py
 ```
 
-## Bekannte Probleme & Lösungen
+## Features
 
-### 90° Video-Rotation
-- **Problem**: Videos erscheinen um 90° gedreht
-- **Lösung**: Koordinaten-Transformation in `ZoomableVideoView.swift`
-- **Code**: Check `updateTrajectory()` Methode für Transformationslogik
+- **Live-Analyse**: Echtzeit-Tracking von Hammerwurf-Bewegungen
+- **Video-Analyse**: Frame-by-Frame Analyse von aufgenommenen Videos
+- **Vergleichsansicht**: Vergleich von zwei Würfen nebeneinander
+- **Pose Detection**: ML-basierte Körperhaltungserkennung
+- **Trajektorien-Darstellung**: Visualisierung der Hammer-Flugbahn
+- **Ellipsen-Berechnung**: Mathematische Analyse der Bewegungsmuster
 
-### ML Model Loading
-- **Problem**: "Unable to load MPSGraphExecutable" Warnings
-- **Lösung**: Diese Warnings können ignoriert werden, das Model funktioniert trotzdem
+## Technologien
 
-### Performance
-- **Tipp**: Confidence Threshold ist auf 0.3 gesetzt für bessere Erkennung
-- **Optimierung**: Frame-Processing erfolgt asynchron auf `processingQueue`
+- **SwiftUI**: Modernes UI-Framework
+- **Vision Framework**: Computer Vision
+- **CoreML**: Machine Learning Model Integration
+- **AVFoundation**: Video-Verarbeitung
+- **Combine**: Reactive Programming (geplant)
 
-## Debugging
+## Entwicklung
 
-### Nützliche Debug-Ausgaben
-- Frame-Detection logs alle 30 Frames (1 Sekunde bei 30fps)
-- Bounding Box Koordinaten werden geloggt
-- Transformationen können in der Console verfolgt werden
+### Voraussetzungen
+- Xcode 15+
+- iOS 17+
+- macOS 14+
 
-### Test-Workflow
-1. Wähle ein Video mit klarem Hammerwurf
-2. Überprüfe Console für Detection-Logs
-3. Verifiziere Trajektorien-Visualisierung
-4. Teste Zoom und Pan Funktionalität
+### Build
+```bash
+open HammerTrack.xcodeproj
+# Command+R zum Build & Run
+```
 
-## Weiterentwicklung
+### Scripts
+```bash
+# TestFlight Build
+./scripts/testflight_setup.sh
 
-### Mögliche Verbesserungen
-1. **Multi-Object Tracking**: Mehrere Hämmer gleichzeitig verfolgen
-2. **3D-Analyse**: Tiefenberechnung aus 2D-Trajektorien
-3. **Export-Funktion**: Trajektorien-Daten als CSV/JSON exportieren
-4. **Kalibrierung**: Reale Distanzen aus Video berechnen
-5. **Slow-Motion Support**: Bessere Unterstützung für Hochgeschwindigkeitsvideos
+# App Store Build
+./scripts/build_for_appstore.sh
 
-### ML Model Training
-- Das aktuelle Model wurde mit YOLO trainiert
-- Für Verbesserungen: Mehr annotierte Trainingsvideos sammeln
-- Dataset sollte verschiedene Lichtverhältnisse und Hintergründe enthalten
+# Icons generieren
+python3 scripts/generate_app_icons.py
+```
 
-## Kontakt & Support
-Bei Fragen oder Problemen erstelle ein Issue im GitHub Repository.
+## Architektur
+
+Das Projekt folgt einer **MVVM-ähnlichen Architektur** mit klarer Trennung von:
+- **Views**: UI-Präsentation
+- **Services**: Business Logic
+- **Utilities**: Helper-Funktionen
+- **Resources**: Assets & ML-Modelle
+
+## Lizenz
+
+© 2024 Merlin Hummel. Alle Rechte vorbehalten.
