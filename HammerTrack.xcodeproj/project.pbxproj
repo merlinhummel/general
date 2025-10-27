@@ -12,37 +12,37 @@
 			containerPortal = AE8020F92E1D02C000EDBD4F /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = AE8021002E1D02C000EDBD4F;
-			remoteInfo = "HammerTrack";
+			remoteInfo = HammerTrack;
 		};
 		AE8021192E1D02C200EDBD4F /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = AE8020F92E1D02C000EDBD4F /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = AE8021002E1D02C000EDBD4F;
-			remoteInfo = "HammerTrack";
+			remoteInfo = HammerTrack;
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		AE8021012E1D02C000EDBD4F /* HammerTrack.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "HammerTrack.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		AE80210E2E1D02C200EDBD4F /* HammerTrackTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "HammerTrackTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
-		AE8021182E1D02C200EDBD4F /* HammerTrackUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "HammerTrackUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		AE8021012E1D02C000EDBD4F /* HammerTrack.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HammerTrack.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AE80210E2E1D02C200EDBD4F /* HammerTrackTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = HammerTrackTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AE8021182E1D02C200EDBD4F /* HammerTrackUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = HammerTrackUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		AE8021032E1D02C000EDBD4F /* HammerTrack */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = "HammerTrack";
+			path = HammerTrack;
 			sourceTree = "<group>";
 		};
 		AE8021112E1D02C200EDBD4F /* HammerTrackTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = "HammerTrackTests";
+			path = HammerTrackTests;
 			sourceTree = "<group>";
 		};
 		AE80211B2E1D02C200EDBD4F /* HammerTrackUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = "HammerTrackUITests";
+			path = HammerTrackUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -110,10 +110,10 @@
 			fileSystemSynchronizedGroups = (
 				AE8021032E1D02C000EDBD4F /* HammerTrack */,
 			);
-			name = "HammerTrack";
+			name = HammerTrack;
 			packageProductDependencies = (
 			);
-			productName = "HammerTrack";
+			productName = HammerTrack;
 			productReference = AE8021012E1D02C000EDBD4F /* HammerTrack.app */;
 			productType = "com.apple.product-type.application";
 		};
@@ -133,10 +133,10 @@
 			fileSystemSynchronizedGroups = (
 				AE8021112E1D02C200EDBD4F /* HammerTrackTests */,
 			);
-			name = "HammerTrackTests";
+			name = HammerTrackTests;
 			packageProductDependencies = (
 			);
-			productName = "HammerTrackTests";
+			productName = HammerTrackTests;
 			productReference = AE80210E2E1D02C200EDBD4F /* HammerTrackTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
@@ -156,10 +156,10 @@
 			fileSystemSynchronizedGroups = (
 				AE80211B2E1D02C200EDBD4F /* HammerTrackUITests */,
 			);
-			name = "HammerTrackUITests";
+			name = HammerTrackUITests;
 			packageProductDependencies = (
 			);
-			productName = "HammerTrackUITests";
+			productName = HammerTrackUITests;
 			productReference = AE8021182E1D02C200EDBD4F /* HammerTrackUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
@@ -505,7 +505,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = "HammerTrack";
+				TEST_TARGET_NAME = HammerTrack;
 			};
 			name = Debug;
 		};
@@ -522,7 +522,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = "HammerTrack";
+				TEST_TARGET_NAME = HammerTrack;
 			};
 			name = Release;
 		};

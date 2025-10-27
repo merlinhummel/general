@@ -102,3 +102,4 @@ old_git*/
 .claude/
 .claude-flow/
 .swarm/
+*.log
