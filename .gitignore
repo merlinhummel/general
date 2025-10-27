@@ -97,3 +97,8 @@ iOSInjectionProject/
 
 # Ignore old git backups
 old_git*/
+
+# Claude Code & Claude Flow
+.claude/
+.claude-flow/
+.swarm/
