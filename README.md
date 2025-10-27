@@ -1,120 +1,127 @@
-# Hammer Track - iOS Trajectory Analysis App
+# HammerTrack
+
+Eine iOS-App zur professionellen Analyse von Hammerwurf-Technik mit ML-basierter Bewegungserkennung.
 
 ## Überblick
-Hammer Track ist eine iOS-App zur Analyse von Hammerwurf-Trajektorien mittels Computer Vision und Machine Learning. Die App erkennt automatisch einen Hammer in Videos und visualisiert dessen Flugbahn.
 
-## Hauptfunktionen
-- **Echtzeit-Hammerkennung**: Verwendet ein trainiertes CoreML-Modell zur Objekterkennung
-- **Trajektorien-Visualisierung**: Zeichnet die Flugbahn des Hammers über das Video
-- **Ellipsen-Analyse**: Erkennt und analysiert die elliptischen Bewegungsmuster
-- **Video-Vergleich**: Vergleicht zwei Videos nebeneinander
-- **Live-Kamera-Unterstützung**: Analyse in Echtzeit mit der Gerätekamera
+HammerTrack nutzt maschinelles Lernen und Computer Vision, um die Bahn des Hammers in Videos zu verfolgen und detaillierte Analysen der Wurftechnik zu erstellen.
 
-## Technische Architektur
+### Hauptfunktionen
 
-### Core ML Model
-- **Datei**: `best.mlpackage`
-- **Typ**: YOLO-basiertes Objekterkennungsmodell
-- **Klasse**: Erkennt "Hammer" mit Konfidenzwerten
-- **Input**: Video-Frames (CVPixelBuffer)
-- **Output**: Bounding Boxes mit Koordinaten und Konfidenz
+- **Einzelanalyse**: Analysiere einzelne Würfe mit automatischer Ellipsen-Erkennung
+- **Vergleichsanalyse**: Vergleiche zwei Würfe nebeneinander
+- **Hammer-Bahn-Visualisierung**: Overlay der Hammer-Flugbahn über dem Video
+- **Ellipsen-Winkel-Berechnung**: Automatische Berechnung von Neigungswinkeln
+- **iOS 18 Liquid Glass Design**: Moderne glasmorphe Benutzeroberfläche
 
-### Hauptkomponenten
+## Technologie-Stack
 
-#### HammerTracker.swift
-Die zentrale Klasse für die Hammererkennung und Trajektorienanalyse:
-- `processVideo(url:)`: Verarbeitet ein Video Frame für Frame
-- `detectHammer(in:frameNumber:timestamp:)`: Führt die ML-Erkennung durch
-- `analyzeTrajectory()`: Analysiert die Trajektorie und findet Ellipsen
-- Verwendet VNCoreMLRequest für die Integration des ML-Modells
+- **SwiftUI**: Moderne deklarative UI
+- **AVFoundation**: Video-Processing
+- **Core ML**: ML-Modell-Integration
+- **Vision Framework**: Frame-Analyse
+- **Combine**: Reaktive Programmierung
 
-#### Views
-1. **ContentView.swift**: Tab-basierte Navigation
-2. **SingleView.swift**: Einzelvideo-Analyse
-3. **CompareView.swift**: Vergleich zweier Videos
-4. **LiveView.swift**: Echtzeit-Kameraanalyse
-5. **ZoomableVideoView.swift**: Video-Player mit Zoom und Trajektorien-Overlay
-6. **TrajectoryView.swift**: Zeichnet die Trajektorien-Pfade
+## Architektur
 
-### Koordinaten-Transformation
-**Wichtig**: iOS-Videos sind oft um 90° gedreht. Die App kompensiert dies:
-- Video-Orientierung wird erkannt (`.right` = 90° CW)
-- Koordinaten werden in `ZoomableVideoView` transformiert
-- Transformation: Für 90° CCW: `new_x = 1 - old_y, new_y = old_x`
+Das Projekt folgt dem MVVM-Pattern:
 
-## Setup für Entwickler
-
-### Voraussetzungen
-- Xcode 14.0+
-- iOS 16.0+ Deployment Target
-- Swift 5.0+
-
-### Installation
-1. Clone das Repository
-2. Öffne `Hammer Track.xcodeproj` in Xcode
-3. Stelle sicher, dass `best.mlpackage` im Projekt enthalten ist
-4. Build und Run (Cmd+R)
-
-### Projekt-Struktur
 ```
 HammerTrack/
-├── Hammer Track.xcodeproj/
-├── Hammer Track/
-│   ├── Assets.xcassets/
-│   ├── best.mlpackage/          # ML Model
-│   ├── Hammer_TrackApp.swift    # App Entry Point
-│   ├── HammerTracker.swift      # Core Logic
-│   ├── ContentView.swift        # Main Navigation
-│   ├── SingleView.swift         # Single Video Analysis
-│   ├── CompareView.swift        # Video Comparison
-│   ├── LiveView.swift           # Live Camera
-│   ├── ZoomableVideoView.swift  # Video Player
-│   └── TrajectoryView.swift     # Trajectory Drawing
-├── Hammer TrackTests/
-└── Hammer TrackUITests/
+├── Models/              # Datenmodelle
+│   ├── HammerData.swift
+│   ├── Ellipse.swift
+│   ├── ThrowAnalysis.swift
+│   └── VideoMetadata.swift
+├── ViewModels/          # Business Logic
+│   ├── SingleAnalysisViewModel.swift
+│   ├── ComparisonViewModel.swift
+│   └── VideoProcessingViewModel.swift
+├── Views/               # UI-Komponenten
+│   ├── ContentView.swift
+│   ├── SingleAnalysisView.swift
+│   ├── ComparisonView.swift
+│   └── Components/
+├── Services/            # Service-Layer
+│   ├── MLModelService.swift
+│   ├── EllipseCalculator.swift
+│   ├── VideoProcessor.swift
+│   └── PathRenderer.swift
+└── Resources/
 ```
 
-## Bekannte Probleme & Lösungen
+## Algorithmus
 
-### 90° Video-Rotation
-- **Problem**: Videos erscheinen um 90° gedreht
-- **Lösung**: Koordinaten-Transformation in `ZoomableVideoView.swift`
-- **Code**: Check `updateTrajectory()` Methode für Transformationslogik
+### Ellipsen-Erkennung
 
-### ML Model Loading
-- **Problem**: "Unable to load MPSGraphExecutable" Warnings
-- **Lösung**: Diese Warnings können ignoriert werden, das Model funktioniert trotzdem
+Die App erkennt Ellipsen basierend auf Richtungswechseln der X-Koordinate:
 
-### Performance
-- **Tipp**: Confidence Threshold ist auf 0.3 gesetzt für bessere Erkennung
-- **Optimierung**: Frame-Processing erfolgt asynchron auf `processingQueue`
+1. Tracke Hammer-Position Frame-für-Frame
+2. Erkenne Umkehrpunkte (X-Koordinaten-Richtungswechsel)
+3. Eine Ellipse = Start → Umkehrpunkt → Ende
+4. Berechne Neigungswinkel aus Höhendifferenz
 
-## Debugging
+### Hammer-Erkennung
 
-### Nützliche Debug-Ausgaben
-- Frame-Detection logs alle 30 Frames (1 Sekunde bei 30fps)
-- Bounding Box Koordinaten werden geloggt
-- Transformationen können in der Console verfolgt werden
+- ML-Modell erkennt Hammer in jedem Frame
+- Stopp-Kriterium: 5 aufeinanderfolgende Frames ohne Erkennung
+- Confidence-Threshold: 0.5
 
-### Test-Workflow
-1. Wähle ein Video mit klarem Hammerwurf
-2. Überprüfe Console für Detection-Logs
-3. Verifiziere Trajektorien-Visualisierung
-4. Teste Zoom und Pan Funktionalität
+## Requirements
 
-## Weiterentwicklung
+- iOS 18.0+
+- Xcode 15.0+
+- Swift 5.9+
 
-### Mögliche Verbesserungen
-1. **Multi-Object Tracking**: Mehrere Hämmer gleichzeitig verfolgen
-2. **3D-Analyse**: Tiefenberechnung aus 2D-Trajektorien
-3. **Export-Funktion**: Trajektorien-Daten als CSV/JSON exportieren
-4. **Kalibrierung**: Reale Distanzen aus Video berechnen
-5. **Slow-Motion Support**: Bessere Unterstützung für Hochgeschwindigkeitsvideos
+## ML-Modell Integration
 
-### ML Model Training
-- Das aktuelle Model wurde mit YOLO trainiert
-- Für Verbesserungen: Mehr annotierte Trainingsvideos sammeln
-- Dataset sollte verschiedene Lichtverhältnisse und Hintergründe enthalten
+Die App ist vorbereitet für die Integration eines Core ML Modells:
 
-## Kontakt & Support
-Bei Fragen oder Problemen erstelle ein Issue im GitHub Repository.
+1. Trainiere ein Object Detection Modell für Hammer-Erkennung
+2. Exportiere als `.mlmodel` Datei
+3. Füge in `HammerTrack/Resources/` hinzu
+4. Aktualisiere `MLModelService.swift` mit dem echten Modell
+
+## Installation
+
+1. Clone das Repository
+2. Öffne `HammerTrack.xcodeproj` in Xcode
+3. Wähle ein Entwicklungsteam in den Signing-Einstellungen
+4. Build und Run auf iOS 18+ Gerät oder Simulator
+
+## Features im Detail
+
+### Einzelanalyse
+
+- Video aus Galerie auswählen
+- Automatische Hammer-Erkennung
+- Ellipsen-Navigation (vorwärts/rückwärts)
+- Interaktive Ellipsen-Auswahl
+- Frame-by-Frame Scrubbing per Drag-Gesture
+- Winkel-Anzeige pro Ellipse
+
+### Vergleichsanalyse
+
+- Zwei Videos nebeneinander
+- Synchronisierte Navigation (optional)
+- Vergleichsstatistiken
+- Unabhängige oder gekoppelte Steuerung
+
+### Liquid Glass Design
+
+- Transluzente Material-Effekte
+- Smooth Spring Animations
+- Glasmorphismus-Buttons
+- Modern iOS 18 Ästhetik
+
+## Lizenz
+
+Proprietär - Alle Rechte vorbehalten
+
+## Version
+
+1.0.0 - Initiales Release
+
+---
+
+Entwickelt mit Claude Code
