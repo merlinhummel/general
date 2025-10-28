@@ -13,46 +13,18 @@ struct LiveView: View {
     @State private var showFocusIndicator = false
     @State private var focusLocation = CGPoint.zero
     @Environment(\.presentationMode) var presentationMode
-    
+
     // Analysis mode selection
     @State private var showAnalysisOptions = false
     @State private var selectedAnalysisMode: AnalysisMode = .trajectory
+
+    // Pose visualization
+    @State private var detectedPose: VNHumanBodyPoseObservation?
+    @State private var showPoseSkeleton = true
     
     var body: some View {
-        VStack(spacing: 0) {
-            // Header with back button
-            HStack {
-                Button(action: {
-                    // Stop camera and go back
-                    cameraManager.stopSession()
-                    presentationMode.wrappedValue.dismiss()
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 14, weight: .semibold))
-                        Text("Zurück")
-                            .font(.system(size: 14))
-                    }
-                    .foregroundColor(.blue)
-                }
-                
-                Spacer()
-                
-                Text("Live View")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(.primary)
-                
-                Spacer()
-                
-                // Placeholder for balance
-                Color.clear
-                    .frame(width: 60, height: 20)
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-            .background(Color(.systemGray6))
-            
-            // Main content area with camera
+        ZStack {
+            // Main content area with camera (fullscreen)
             ZStack {
                 // Camera Preview with tap to focus
                 if cameraManager.isCameraReady {
@@ -62,7 +34,7 @@ struct LiveView: View {
                             showFocusIndicator = true
                         }
                         cameraManager.setFocus(at: location)
-                        
+
                         // Hide focus indicator after a moment
                         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                             withAnimation(.easeOut(duration: 0.3)) {
@@ -70,12 +42,12 @@ struct LiveView: View {
                             }
                         }
                     })
-                    .ignoresSafeArea(edges: .bottom)
+                    .ignoresSafeArea()
                 } else {
                     // Show loading or black screen with indicator
                     ZStack {
                         Color.black
-                            .ignoresSafeArea(edges: .bottom)
+                            .ignoresSafeArea()
                         
                         VStack(spacing: 20) {
                             ProgressView()
@@ -95,11 +67,57 @@ struct LiveView: View {
                         .position(focusLocation)
                         .allowsHitTesting(false)
                 }
+
+                // Pose Skeleton Overlay
+                if showPoseSkeleton, let pose = cameraManager.detectedPose {
+                    PoseSkeletonView(observation: pose)
+                        .allowsHitTesting(false)
+                }
             
-            // Overlay Controls
+            // Overlay: Floating UI Elements
             VStack {
+                // Floating Header Buttons (like SingleView)
+                HStack {
+                    // Back button
+                    Button(action: {
+                        // Stop camera and go back
+                        cameraManager.stopSession()
+                        presentationMode.wrappedValue.dismiss()
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 14, weight: .semibold))
+                            Text("Zurück")
+                                .font(.system(size: 14))
+                        }
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .liquidGlassEffect(style: .thin, cornerRadius: 12)
+                    }
+
+                    Spacer()
+
+                    // Title
+                    Text("Live View")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .liquidGlassEffect(style: .thin, cornerRadius: 12)
+
+                    Spacer()
+
+                    // Placeholder for balance
+                    Color.clear
+                        .frame(width: 80, height: 20)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 12)
+                .padding(.top, 0)
+
                 Spacer()
-                
+
                 if isAnalysisMode {
                     // Analysis status at top
                     VStack(alignment: .center, spacing: 4) {
@@ -142,13 +160,13 @@ struct LiveView: View {
                 
                 Spacer()
                 
-                // Analysis Results Overlay
+                // Analysis Results Overlay with Liquid Glass
                 if showAnalysisResults && !analysisResultText.isEmpty {
                     VStack {
                         Text("Analyse Ergebnisse:")
                             .font(.headline)
                             .foregroundColor(.white)
-                        
+
                         Text(analysisResultText)
                             .font(.body)
                             .foregroundColor(.white)
@@ -156,9 +174,7 @@ struct LiveView: View {
                             .padding()
                     }
                     .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.black.opacity(0.8))
-                    .cornerRadius(15)
+                    .floatingGlassCard(cornerRadius: 20)
                     .padding(.horizontal)
                     .transition(.opacity)
                 }
@@ -178,9 +194,7 @@ struct LiveView: View {
                             .foregroundColor(.white)
                             .padding(.horizontal, 30)
                             .padding(.vertical, 15)
-                            .background(Color.blue)
-                            .cornerRadius(25)
-                            .shadow(color: Color.black.opacity(0.3), radius: 5, x: 0, y: 3)
+                            .interactiveLiquidGlass(cornerRadius: 25)
                         }
                         .disabled(!cameraManager.isCameraReady)
                         .opacity(cameraManager.isCameraReady ? 1.0 : 0.6)
@@ -290,6 +304,11 @@ struct LiveView: View {
             
             // Start camera immediately
             cameraManager.checkPermissions()
+
+            // Automatically start pose detection for testing
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                cameraManager.startLiveAnalysis()
+            }
         }
         .onDisappear {
             cameraManager.stopSession()
@@ -355,7 +374,10 @@ class CameraManager: NSObject, ObservableObject {
     @Published var currentZoomFactor: CGFloat = 1.0
     @Published var availableZoomFactors: [CGFloat] = [1.0]
     @Published var isCameraReady = false
-    
+
+    // Pose visualization
+    @Published var detectedPose: VNHumanBodyPoseObservation?
+
     // Analysis mode
     var analysisMode: AnalysisMode = .trajectory
     
@@ -424,71 +446,55 @@ class CameraManager: NSObject, ObservableObject {
     }
     
     private func processPoseObservation(_ observation: VNHumanBodyPoseObservation) {
-        // Process pose for knee angles if needed
-        if analysisMode == .kneeAngle || analysisMode == .both {
-            let poseResult = poseAnalyzer.processPoseObservation(
-                observation, 
-                frameNumber: frameCount, 
-                timestamp: Date().timeIntervalSince1970
-            )
-            
-            // Debug output every 30 frames (disabled for performance)
-            // if frameCount % 30 == 0 && (poseResult.leftKneeAngle != nil || poseResult.rightKneeAngle != nil) {
-            //     print("Knee angles - Left: \(poseResult.leftKneeAngle ?? -1), Right: \(poseResult.rightKneeAngle ?? -1)")
-            // }
+        // Update detected pose for visualization
+        DispatchQueue.main.async { [weak self] in
+            self?.detectedPose = observation
         }
-        
-        // Check for arm raised (for trajectory analysis)
+
+        // Check for arm raised (with sound feedback only, no auto-start)
         if analysisMode == .trajectory || analysisMode == .both {
             do {
                 // Get right wrist position (kann auch left wrist nehmen)
                 let rightWrist = try observation.recognizedPoint(.rightWrist)
                 let rightElbow = try observation.recognizedPoint(.rightElbow)
                 let rightShoulder = try observation.recognizedPoint(.rightShoulder)
-                
-                // Debug output every 30 frames (disabled for performance)
-                // if frameCount % 30 == 0 {
-                //     print("Pose detection - Wrist: \(rightWrist.y), Elbow: \(rightElbow.y), Shoulder: \(rightShoulder.y), Confidence: \(rightWrist.confidence)")
-                // }
-                
-                // FIXED: In Vision coordinates, Y=0 is top, Y=1 is bottom
+
+                // In Vision coordinates, Y=0 is top, Y=1 is bottom
                 // So for arm raised: wrist.y < elbow.y < shoulder.y
                 let isArmRaised = rightWrist.y < rightElbow.y && rightElbow.y < rightShoulder.y && rightWrist.confidence > 0.3
-                
+
                 // Throttled UI updates for pose detection
                 let currentTime = CACurrentMediaTime()
                 if currentTime - lastUIUpdateTime >= uiUpdateInterval {
                     lastUIUpdateTime = currentTime
-                    
+
                     DispatchQueue.main.async { [weak self] in
                         guard let self = self else { return }
-                        
+
                         if isArmRaised && !self.isActivelyTracking && self.isAnalyzing {
-                            // Arm is raised
+                            // Arm is raised - play sound but DON'T start tracking automatically
                             if self.armRaisedStartTime == nil {
                                 self.armRaisedStartTime = Date()
                                 self.isDetectingPose = true
-                                self.poseDetectionStatus = "Arm erkannt - halte Position..."
-                                
+                                self.poseDetectionStatus = "Arm erkannt!"
+
                                 // Play detection sound
                                 AudioServicesPlaySystemSound(1103) // Tock sound
                                 print("Arm raised detected! Playing sound...")
-                            } else if let startTime = self.armRaisedStartTime,
-                                      Date().timeIntervalSince(startTime) >= self.armRaisedThreshold {
-                                // Arm has been raised long enough - start tracking
-                                self.startTrackingHammer()
                             }
+                            // REMOVED: Auto-start of hammer tracking
+                            // User must manually start analysis via button
                         } else if !isArmRaised && self.armRaisedStartTime != nil && !self.isActivelyTracking {
-                            // Arm lowered before threshold
+                            // Arm lowered
                             self.armRaisedStartTime = nil
                             self.isDetectingPose = false
                             self.poseDetectionStatus = "Arm heben zum Start"
                         }
                     }
                 }
-                
+
                 self.lastArmPosition = rightWrist
-                
+
             } catch {
                 // Pose points not available
             }
@@ -954,33 +960,35 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             }
         }
         
+        // TEMPORÄR DEAKTIVIERT: Hammer tracking
+        /*
         if isActivelyTracking && (analysisMode == .trajectory || analysisMode == .both) {
             let currentFrameCount = frameCount
-            
+
             hammerTrackingQueue.async { [weak self] in
                 guard let self = self else { return }
-                
+
                 let previousFrameCount = self.hammerTracker?.currentTrajectory?.frames.count ?? 0
-                
+
                 self.hammerTracker?.processLiveFrame(pixelBuffer, frameNumber: currentFrameCount)
-                
+
                 let newFrameCount = self.hammerTracker?.currentTrajectory?.frames.count ?? 0
-                
+
                 if newFrameCount > previousFrameCount {
                     self.consecutiveFramesWithoutHammer = 0
                 } else {
                     self.consecutiveFramesWithoutHammer += 1
-                    
+
                     let currentTime = CACurrentMediaTime()
                     if currentTime - self.lastUIUpdateTime >= self.uiUpdateInterval {
                         self.lastUIUpdateTime = currentTime
                         let currentCount = self.consecutiveFramesWithoutHammer
-                        
+
                         DispatchQueue.main.async {
                             self.framesWithoutHammer = currentCount
                         }
                     }
-                    
+
                     if self.consecutiveFramesWithoutHammer >= self.maxFramesWithoutHammer {
                         print("No hammer detected for \(self.maxFramesWithoutHammer) frames, completing analysis")
                         DispatchQueue.main.async {
@@ -990,6 +998,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 }
             }
         }
+        */
     }
 }
 
@@ -1072,9 +1081,124 @@ class CameraPreviewView: UIView {
     }
 }
 
+struct PoseSkeletonView: View {
+    let observation: VNHumanBodyPoseObservation
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                // Draw skeleton connections (lines)
+                ForEach(PoseConnection.allConnections, id: \.id) { connection in
+                    if let startPoint = try? observation.recognizedPoint(connection.start),
+                       let endPoint = try? observation.recognizedPoint(connection.end),
+                       startPoint.confidence > 0.1 && endPoint.confidence > 0.1 {
+
+                        let start = convertVisionPoint(startPoint.location, in: geometry.size)
+                        let end = convertVisionPoint(endPoint.location, in: geometry.size)
+
+                        Path { path in
+                            path.move(to: start)
+                            path.addLine(to: end)
+                        }
+                        .stroke(Color.green, lineWidth: 3)
+                    }
+                }
+
+                // Draw joints (circles)
+                ForEach(PoseJoint.allJoints) { joint in
+                    if let point = try? observation.recognizedPoint(joint.name),
+                       point.confidence > 0.1 {
+
+                        let position = convertVisionPoint(point.location, in: geometry.size)
+
+                        Circle()
+                            .fill(Color.cyan)
+                            .frame(width: 12, height: 12)
+                            .overlay(
+                                Circle()
+                                    .stroke(Color.white, lineWidth: 2)
+                            )
+                            .position(position)
+                    }
+                }
+            }
+        }
+    }
+
+    private func convertVisionPoint(_ point: CGPoint, in size: CGSize) -> CGPoint {
+        // Vision coordinates: (0,0) = bottom-left, (1,1) = top-right
+        // SwiftUI coordinates: (0,0) = top-left
+        // Flip both X (for mirror) and Y axis for portrait orientation
+
+        return CGPoint(
+            x: (1 - point.x) * size.width,  // Flip X for mirror
+            y: (1 - point.y) * size.height  // Flip Y for coordinate system
+        )
+    }
+}
+
+// Helper struct to make joints identifiable for ForEach
+struct PoseJoint: Identifiable {
+    let id = UUID()
+    let name: VNHumanBodyPoseObservation.JointName
+
+    static let allJoints = [
+        PoseJoint(name: .nose),
+        PoseJoint(name: .neck),
+        PoseJoint(name: .rightShoulder),
+        PoseJoint(name: .rightElbow),
+        PoseJoint(name: .rightWrist),
+        PoseJoint(name: .leftShoulder),
+        PoseJoint(name: .leftElbow),
+        PoseJoint(name: .leftWrist),
+        PoseJoint(name: .rightHip),
+        PoseJoint(name: .rightKnee),
+        PoseJoint(name: .rightAnkle),
+        PoseJoint(name: .leftHip),
+        PoseJoint(name: .leftKnee),
+        PoseJoint(name: .leftAnkle),
+        PoseJoint(name: .root),
+        PoseJoint(name: .rightEye),
+        PoseJoint(name: .leftEye),
+        PoseJoint(name: .rightEar),
+        PoseJoint(name: .leftEar)
+    ]
+}
+
+struct PoseConnection: Identifiable {
+    let id = UUID()
+    let start: VNHumanBodyPoseObservation.JointName
+    let end: VNHumanBodyPoseObservation.JointName
+
+    static let allConnections: [PoseConnection] = [
+        // Torso
+        PoseConnection(start: .neck, end: .root),
+
+        // Left arm
+        PoseConnection(start: .neck, end: .leftShoulder),
+        PoseConnection(start: .leftShoulder, end: .leftElbow),
+        PoseConnection(start: .leftElbow, end: .leftWrist),
+
+        // Right arm
+        PoseConnection(start: .neck, end: .rightShoulder),
+        PoseConnection(start: .rightShoulder, end: .rightElbow),
+        PoseConnection(start: .rightElbow, end: .rightWrist),
+
+        // Left leg
+        PoseConnection(start: .root, end: .leftHip),
+        PoseConnection(start: .leftHip, end: .leftKnee),
+        PoseConnection(start: .leftKnee, end: .leftAnkle),
+
+        // Right leg
+        PoseConnection(start: .root, end: .rightHip),
+        PoseConnection(start: .rightHip, end: .rightKnee),
+        PoseConnection(start: .rightKnee, end: .rightAnkle),
+    ]
+}
+
 struct FocusIndicatorView: View {
     @State private var animating = false
-    
+
     var body: some View {
         Rectangle()
             .stroke(Color.yellow, lineWidth: 2)

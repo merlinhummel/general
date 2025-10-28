@@ -9,6 +9,9 @@ struct ZoomableVideoView: UIViewRepresentable {
     @Binding var currentTime: Double
     let showFullTrajectory: Bool
     let showTrajectory: Bool
+    let selectedEllipseIndex: Int?  // Wenn gesetzt, nur diese Ellipse anzeigen
+    let analysisResult: TrajectoryAnalysis?  // Für Ellipsen-Info
+    var onEllipseTapped: ((Int?) -> Void)?  // Callback wenn Ellipse getippt wird (nil = Modus beenden)
     
     func makeUIView(context: Context) -> UIView {
         let containerView = UIView()
@@ -55,13 +58,15 @@ struct ZoomableVideoView: UIViewRepresentable {
         currentPositionLayer.fillColor = UIColor.yellow.cgColor
         currentPositionLayer.strokeColor = UIColor.orange.cgColor
         currentPositionLayer.lineWidth = 1.0  // Reduced from 2.0
-        
+
         // Add shadow for better visibility
         currentPositionLayer.shadowColor = UIColor.black.cgColor
         currentPositionLayer.shadowOpacity = 0.5
         currentPositionLayer.shadowOffset = CGSize(width: 0, height: 0)
         currentPositionLayer.shadowRadius = 2.0
-        videoContainerView.layer.addSublayer(currentPositionLayer)        
+        videoContainerView.layer.addSublayer(currentPositionLayer)
+
+        
         // Store references
         context.coordinator.containerView = containerView
         context.coordinator.scrollView = scrollView
@@ -69,26 +74,40 @@ struct ZoomableVideoView: UIViewRepresentable {
         context.coordinator.playerLayer = playerLayer
         context.coordinator.trajectoryLayer = trajectoryLayer
         context.coordinator.currentPositionLayer = currentPositionLayer
-        
+        context.coordinator.onEllipseTapped = onEllipseTapped
+
+        // Add single tap gesture for ellipse selection
+        let singleTapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleSingleTap(_:)))
+        singleTapGesture.numberOfTapsRequired = 1
+        videoContainerView.addGestureRecognizer(singleTapGesture)
+
         // Add double tap gesture for reset zoom
         let doubleTapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleDoubleTap(_:)))
         doubleTapGesture.numberOfTapsRequired = 2
         scrollView.addGestureRecognizer(doubleTapGesture)
-        
+
+        // Single tap should wait for double tap to fail
+        singleTapGesture.require(toFail: doubleTapGesture)
+
         return containerView
     }
     
     func updateUIView(_ uiView: UIView, context: Context) {
         if showTrajectory {
-            context.coordinator.updateTrajectory(trajectory, currentTime: currentTime, showFullTrajectory: showFullTrajectory)
+            context.coordinator.updateTrajectory(
+                trajectory,
+                currentTime: currentTime,
+                showFullTrajectory: showFullTrajectory,
+                selectedEllipseIndex: selectedEllipseIndex,
+                analysisResult: analysisResult
+            )
         } else {
             context.coordinator.trajectoryLayer?.path = nil
             context.coordinator.currentPositionLayer?.isHidden = true
         }
-        
-        DispatchQueue.main.async {
-            context.coordinator.updateLayout()
-        }
+
+        // Only update layout if bounds have changed (not on every frame)
+        context.coordinator.updateLayoutIfNeeded()
     }
     
     func makeCoordinator() -> Coordinator {
@@ -102,11 +121,32 @@ struct ZoomableVideoView: UIViewRepresentable {
         weak var playerLayer: AVPlayerLayer?
         weak var trajectoryLayer: CAShapeLayer?
         weak var currentPositionLayer: CAShapeLayer?
-        
+
         // Zoom state
         var currentZoomScale: CGFloat = 1.0
         var currentContentOffset: CGPoint = .zero
-        
+        var lastBounds: CGRect = .zero
+        var isRestoringZoom = false
+
+        // Ellipse tap callback
+        var onEllipseTapped: ((Int?) -> Void)?
+
+        // Store current trajectory and analysis for hit-testing
+        var currentTrajectory: Trajectory?
+        var currentAnalysis: TrajectoryAnalysis?
+        var currentVideoRect: CGRect = .zero
+
+        func updateLayoutIfNeeded() {
+            guard let containerView = containerView else { return }
+            let bounds = containerView.bounds
+
+            // Only update layout if bounds actually changed
+            if bounds != lastBounds {
+                lastBounds = bounds
+                updateLayout()
+            }
+        }
+
         func updateLayout() {
             guard let containerView = containerView,
                   let scrollView = scrollView,
@@ -130,27 +170,36 @@ struct ZoomableVideoView: UIViewRepresentable {
                 return
             }
             
-            // For aspect fill, we need to calculate the scaling differently
+            // iOS Galerie-Style: aspect fill bei Zoom 1.0, aspect fit bei minimumZoomScale
             let containerAspect = bounds.width / bounds.height
             let videoAspect = videoSize.width / videoSize.height
-            
-            var scale: CGFloat = 1.0
+
+            // Berechne aspect FILL Skalierung (Standard-Ansicht, Video füllt Bildschirm)
+            let fillScale: CGFloat
             if containerAspect > videoAspect {
-                // Container is wider than video - scale based on width
-                scale = bounds.width / videoSize.width
+                fillScale = bounds.width / videoSize.width
             } else {
-                // Container is taller than video - scale based on height
-                scale = bounds.height / videoSize.height
+                fillScale = bounds.height / videoSize.height
             }
-            
-            let scaledSize = CGSize(width: videoSize.width * scale, height: videoSize.height * scale)
+
+            // Berechne aspect FIT Skalierung (Video komplett sichtbar)
+            // WICHTIG: Immer nach BREITE skalieren, damit Video links/rechts am Rand ist
+            // Schwarze Balken nur oben/unten erlaubt!
+            let fitScale = bounds.width / videoSize.width
+
+            // minimumZoomScale: Wie weit muss man rauszoomen um von fill zu fit zu kommen?
+            let minZoomScale = fitScale / fillScale
+            scrollView.minimumZoomScale = max(minZoomScale, 0.1) // Mindestens 0.1 als Sicherheit
+
+            // Video-Container in aspect fill Größe
+            let scaledSize = CGSize(width: videoSize.width * fillScale, height: videoSize.height * fillScale)
             let videoRect = CGRect(
                 x: (bounds.width - scaledSize.width) / 2,
                 y: (bounds.height - scaledSize.height) / 2,
                 width: scaledSize.width,
                 height: scaledSize.height
             )
-            
+
             videoContainerView.frame = videoRect
             scrollView.contentSize = videoRect.size
             
@@ -162,21 +211,44 @@ struct ZoomableVideoView: UIViewRepresentable {
             // Center the content if it's smaller than scroll view
             centerContent()
             
-            // Restore zoom state if we had one
-            if currentZoomScale > 1.0 {
-                scrollView.setZoomScale(currentZoomScale, animated: false)
-                scrollView.setContentOffset(currentContentOffset, animated: false)
+            // Restore zoom state if we had one and it was lost
+            if currentZoomScale > 1.0 && scrollView.zoomScale == 1.0 && !isRestoringZoom {
+                isRestoringZoom = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self, weak scrollView] in
+                    guard let self = self, let scrollView = scrollView else { return }
+                    scrollView.setZoomScale(self.currentZoomScale, animated: false)
+                    if self.currentContentOffset != .zero {
+                        scrollView.setContentOffset(self.currentContentOffset, animated: false)
+                    }
+                    self.isRestoringZoom = false
+                }
             }
         }        
         func centerContent() {
             guard let scrollView = scrollView else { return }
-            
-            let offsetX = max((scrollView.bounds.width - scrollView.contentSize.width) * 0.5, 0)
-            let offsetY = max((scrollView.bounds.height - scrollView.contentSize.height) * 0.5, 0)
-            scrollView.contentInset = UIEdgeInsets(top: offsetY, left: offsetX, bottom: offsetY, right: offsetX)
+
+            // WICHTIG: Verwende die tatsächliche GEZOOMTE Größe, nicht nur contentSize!
+            let zoomedWidth = scrollView.contentSize.width * scrollView.zoomScale
+            let zoomedHeight = scrollView.contentSize.height * scrollView.zoomScale
+
+            // Berechne Offset - Video soll immer links/rechts am Rand sein
+            let offsetX = max((scrollView.bounds.width - zoomedWidth) * 0.5, 0)
+            let offsetY = max((scrollView.bounds.height - zoomedHeight) * 0.5, 0)
+
+            // Nur setzen wenn sich was geändert hat (Performance)
+            let newInset = UIEdgeInsets(top: offsetY, left: offsetX, bottom: offsetY, right: offsetX)
+            if scrollView.contentInset != newInset {
+                scrollView.contentInset = newInset
+            }
         }
         
-        func updateTrajectory(_ trajectory: Trajectory?, currentTime: Double, showFullTrajectory: Bool) {
+        func updateTrajectory(
+            _ trajectory: Trajectory?,
+            currentTime: Double,
+            showFullTrajectory: Bool,
+            selectedEllipseIndex: Int?,
+            analysisResult: TrajectoryAnalysis?
+        ) {
             guard let trajectory = trajectory,
                   let trajectoryLayer = trajectoryLayer,
                   let currentPositionLayer = currentPositionLayer,
@@ -185,64 +257,115 @@ struct ZoomableVideoView: UIViewRepresentable {
                 currentPositionLayer?.path = nil
                 return
             }
-            
+
             let bounds = videoContainerView.bounds
             guard bounds.width > 0 && bounds.height > 0 else { return }
-            
+
             // Get the actual video frame within the container
             guard let playerLayer = playerLayer else { return }
             let videoRect = playerLayer.videoRect
-            
+
             // If video rect is invalid, use the entire bounds
-            let drawRect = (videoRect.width > 0 && videoRect.height > 0 && 
+            let drawRect = (videoRect.width > 0 && videoRect.height > 0 &&
                            !videoRect.width.isNaN && !videoRect.height.isNaN) ? videoRect : bounds
-            
+
+            // Store for hit-testing
+            self.currentTrajectory = trajectory
+            self.currentAnalysis = analysisResult
+            self.currentVideoRect = drawRect
+
             // Draw trajectory using the same logic as TrajectoryView
-            drawTrajectory(in: drawRect, trajectory: trajectory, currentTime: currentTime, showFullTrajectory: showFullTrajectory)
+            drawTrajectory(
+                in: drawRect,
+                trajectory: trajectory,
+                currentTime: currentTime,
+                showFullTrajectory: showFullTrajectory,
+                selectedEllipseIndex: selectedEllipseIndex,
+                analysisResult: analysisResult
+            )
         }        
-        private func drawTrajectory(in videoRect: CGRect, trajectory: Trajectory, currentTime: Double, showFullTrajectory: Bool) {
+        private func drawTrajectory(
+            in videoRect: CGRect,
+            trajectory: Trajectory,
+            currentTime: Double,
+            showFullTrajectory: Bool,
+            selectedEllipseIndex: Int?,
+            analysisResult: TrajectoryAnalysis?
+        ) {
             guard let trajectoryLayer = trajectoryLayer,
                   let currentPositionLayer = currentPositionLayer else { return }
-            
+
             // Create trajectory path
             let path = UIBezierPath()
             var hasStarted = false
-            
+
             // Use lightly smoothed points from trajectory
             let smoothedPoints = trajectory.smoothedPoints
-            
+
             // Ensure we have valid frames
             guard !smoothedPoints.isEmpty && trajectory.frames.count == smoothedPoints.count else {
                 trajectoryLayer.path = nil
                 currentPositionLayer.path = nil
                 return
             }
-            
+
+            // Wenn eine Ellipse ausgewählt ist, nur deren Punkte zeichnen
+            var visibleFrameIndices: Set<Int>?
+            if let ellipseIndex = selectedEllipseIndex,
+               let analysis = analysisResult,
+               ellipseIndex >= 0 && ellipseIndex < analysis.ellipses.count {
+
+                let ellipse = analysis.ellipses[ellipseIndex]
+
+                // Sammle alle frameIndices dieser Ellipse
+                var indices = Set<Int>()
+                for frame in ellipse.frames {
+                    if let index = trajectory.frames.firstIndex(where: { $0.frameNumber == frame.frameNumber }) {
+                        indices.insert(index)
+                    }
+                }
+                visibleFrameIndices = indices
+            }
+
             for (index, point) in smoothedPoints.enumerated() {
+                // Wenn Ellipsen-Filter aktiv, prüfe ob dieser Punkt zur Ellipse gehört
+                if let visible = visibleFrameIndices, !visible.contains(index) {
+                    continue
+                }
+
                 // Validate point before using
-                guard !point.x.isNaN && !point.y.isNaN && 
+                guard !point.x.isNaN && !point.y.isNaN &&
                       point.x.isFinite && point.y.isFinite else { continue }
-                
+
                 // Transform normalized coordinates (0-1) to display coordinates
                 // Flip Y-axis: when object is at top in video, show at top in trajectory
                 let displayPoint = CGPoint(
                     x: videoRect.origin.x + (point.x * videoRect.width),
                     y: videoRect.origin.y + ((1.0 - point.y) * videoRect.height)  // Flip Y
                 )
-                
+
                 // Validate display point
                 guard !displayPoint.x.isNaN && !displayPoint.y.isNaN &&
                       displayPoint.x.isFinite && displayPoint.y.isFinite else { continue }
-                
-                if showFullTrajectory {
+
+                // Im Ellipsen-Modus: Zeige IMMER die komplette Ellipse
+                if visibleFrameIndices != nil {
                     if !hasStarted {
                         path.move(to: displayPoint)
                         hasStarted = true
                     } else {
                         path.addLine(to: displayPoint)
                     }
-                }                else {
-                    // Show trajectory up to current time
+                } else if showFullTrajectory {
+                    // Normal-Modus: Zeige komplette Trajectory
+                    if !hasStarted {
+                        path.move(to: displayPoint)
+                        hasStarted = true
+                    } else {
+                        path.addLine(to: displayPoint)
+                    }
+                } else {
+                    // Normal-Modus mit Zeit-Filter: Zeige Trajectory bis currentTime
                     if index < trajectory.frames.count && trajectory.frames[index].timestamp <= currentTime {
                         if !hasStarted {
                             path.move(to: displayPoint)
@@ -253,7 +376,7 @@ struct ZoomableVideoView: UIViewRepresentable {
                     }
                 }
             }
-            
+
             trajectoryLayer.path = path.cgPath
             
             // Update current position indicator
@@ -294,7 +417,8 @@ struct ZoomableVideoView: UIViewRepresentable {
             } else {
                 currentPositionLayer.isHidden = true
             }
-        }        
+        }
+
         // MARK: - UIScrollViewDelegate
         func viewForZooming(in scrollView: UIScrollView) -> UIView? {
             return videoContainerView
@@ -302,32 +426,118 @@ struct ZoomableVideoView: UIViewRepresentable {
         
         func scrollViewDidZoom(_ scrollView: UIScrollView) {
             centerContent()
-            // Save zoom state
+            // Save zoom state continuously
+            currentZoomScale = scrollView.zoomScale
+            currentContentOffset = scrollView.contentOffset
+        }
+
+        func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
+            // Lock zoom when user finishes zooming
+            currentZoomScale = scale
+            currentContentOffset = scrollView.contentOffset
+        }
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            // Keep content offset updated when zoomed
+            if scrollView.zoomScale > 1.0 {
+                currentContentOffset = scrollView.contentOffset
+            }
+        }
+
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            // Save zoom state when dragging ends
+            currentZoomScale = scrollView.zoomScale
+            currentContentOffset = scrollView.contentOffset
+        }
+
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+            // Save zoom state when scrolling ends
             currentZoomScale = scrollView.zoomScale
             currentContentOffset = scrollView.contentOffset
         }
         
-        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-            // Save zoom state when dragging ends
-            currentContentOffset = scrollView.contentOffset
-        }
-        
-        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
-            // Save zoom state when scrolling ends
-            currentContentOffset = scrollView.contentOffset
-        }
-        
         // MARK: - Gesture Handlers
+        @objc func handleSingleTap(_ gesture: UITapGestureRecognizer) {
+            guard let analysis = currentAnalysis,
+                  let trajectory = currentTrajectory,
+                  !analysis.ellipses.isEmpty else { return }
+
+            let tapLocation = gesture.location(in: videoContainerView)
+
+            // Finde die Ellipse, die am nächsten zum Tap ist
+            if let tappedEllipseIndex = findEllipseAtPoint(tapLocation) {
+                // Ellipse wurde getippt → Aktiviere Ellipsen-Modus
+                print("🎯 Ellipse \(tappedEllipseIndex) getippt!")
+                onEllipseTapped?(tappedEllipseIndex)
+            } else {
+                // Außerhalb getippt → Deaktiviere Ellipsen-Modus
+                print("🔄 Ellipsen-Modus deaktiviert")
+                onEllipseTapped?(nil)  // nil bedeutet: zurück zum Normal-Modus
+            }
+        }
+
         @objc func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
             guard let scrollView = scrollView else { return }
-            
+
             if scrollView.zoomScale > scrollView.minimumZoomScale {
+                // Reset zoom
                 scrollView.setZoomScale(scrollView.minimumZoomScale, animated: true)
+                currentZoomScale = 1.0
+                currentContentOffset = .zero
             } else {
+                // Zoom to 3x on tap location
                 let location = gesture.location(in: videoContainerView)
-                let rect = CGRect(x: location.x - 50, y: location.y - 50, width: 100, height: 100)
-                scrollView.zoom(to: rect, animated: true)
+                let zoomScale: CGFloat = 3.0
+                let zoomRect = CGRect(
+                    x: location.x - (scrollView.bounds.width / (2 * zoomScale)),
+                    y: location.y - (scrollView.bounds.height / (2 * zoomScale)),
+                    width: scrollView.bounds.width / zoomScale,
+                    height: scrollView.bounds.height / zoomScale
+                )
+                scrollView.zoom(to: zoomRect, animated: true)
             }
+        }
+
+        // MARK: - Hit Testing
+        private func findEllipseAtPoint(_ point: CGPoint) -> Int? {
+            guard let analysis = currentAnalysis,
+                  let trajectory = currentTrajectory else { return nil }
+
+            let videoRect = currentVideoRect
+            let smoothedPoints = trajectory.smoothedPoints
+
+            // Finde die nächstgelegene Ellipse zum Tap
+            var closestEllipse: Int? = nil
+            var minDistance: CGFloat = 50.0  // Max 50 Punkte Entfernung für Hit
+
+            for (ellipseIndex, ellipse) in analysis.ellipses.enumerated() {
+                // Sammle alle Punkte dieser Ellipse
+                for frame in ellipse.frames {
+                    if let index = trajectory.frames.firstIndex(where: { $0.frameNumber == frame.frameNumber }),
+                       index < smoothedPoints.count {
+
+                        let trajPoint = smoothedPoints[index]
+
+                        // Transform to display coordinates
+                        let displayPoint = CGPoint(
+                            x: videoRect.origin.x + (trajPoint.x * videoRect.width),
+                            y: videoRect.origin.y + ((1.0 - trajPoint.y) * videoRect.height)
+                        )
+
+                        // Berechne Distanz zum Tap
+                        let dx = displayPoint.x - point.x
+                        let dy = displayPoint.y - point.y
+                        let distance = sqrt(dx * dx + dy * dy)
+
+                        if distance < minDistance {
+                            minDistance = distance
+                            closestEllipse = ellipseIndex
+                        }
+                    }
+                }
+            }
+
+            return closestEllipse
         }
     }
 }
