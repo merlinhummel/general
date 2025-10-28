@@ -1,0 +1,5 @@
+Command line invocation:
+    /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -project HammerTrack.xcodeproj -scheme HammerTrack -destination "platform=iOS Simulator,name=iPhone 15" build 2
+
+2025-10-28 13:22:26.637 xcodebuild[88461:4027558] Writing error result bundle to /var/folders/98/tmk5ffw131sfw4th8byxr_800000gn/T/ResultBundle_2025-28-10_13-22-0026.xcresult
+xcodebuild: error: Unknown build action '2'.
