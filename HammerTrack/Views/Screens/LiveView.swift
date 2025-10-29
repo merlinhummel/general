@@ -13,14 +13,6 @@ struct LiveView: View {
     @State private var showFocusIndicator = false
     @State private var focusLocation = CGPoint.zero
     @Environment(\.presentationMode) var presentationMode
-
-    // Analysis mode selection
-    @State private var showAnalysisOptions = false
-    @State private var selectedAnalysisMode: AnalysisMode = .trajectory
-
-    // Pose visualization
-    @State private var detectedPose: VNHumanBodyPoseObservation?
-    @State private var showPoseSkeleton = true
     
     var body: some View {
         ZStack {
@@ -69,13 +61,13 @@ struct LiveView: View {
                 }
 
                 // Pose Skeleton Overlay
-                if showPoseSkeleton, let pose = cameraManager.detectedPose {
+                if cameraManager.isPoseDetectionEnabled, let pose = cameraManager.detectedPose {
                     PoseSkeletonView(observation: pose)
                         .allowsHitTesting(false)
                 }
             
             // Overlay: Floating UI Elements
-            VStack {
+            VStack(spacing: 0) {
                 // Floating Header Buttons (like SingleView)
                 HStack {
                     // Back button
@@ -117,48 +109,6 @@ struct LiveView: View {
                 .padding(.top, 0)
 
                 Spacer()
-
-                if isAnalysisMode {
-                    // Analysis status at top
-                    VStack(alignment: .center, spacing: 4) {
-                        HStack {
-                            Text(cameraManager.isDetectingPose ? "Arm erkannt - Bereit" : "Arm heben zum Start")
-                                .font(.caption)
-                                .foregroundColor(.white)
-                            
-                            if cameraManager.isActivelyTracking {
-                                Circle()
-                                    .fill(Color.red)
-                                    .frame(width: 10, height: 10)
-                                    .overlay(
-                                        Circle()
-                                            .stroke(Color.red, lineWidth: 2)
-                                            .scaleEffect(1.5)
-                                            .opacity(0.5)
-                                            .animation(.easeInOut(duration: 1).repeatForever(), value: cameraManager.isActivelyTracking)
-                                    )
-                            }
-                        }
-                        
-                        // Show current analysis mode
-                        Text("Modus: \(selectedAnalysisMode.rawValue)")
-                            .font(.caption2)
-                            .foregroundColor(.white.opacity(0.8))
-                        
-                        if cameraManager.framesWithoutHammer > 0 && cameraManager.isActivelyTracking {
-                            Text("Frames ohne Hammer: \(cameraManager.framesWithoutHammer)/7")
-                                .font(.caption2)
-                                .foregroundColor(.yellow)
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(cameraManager.isActivelyTracking ? Color.red : Color.orange)
-                    .cornerRadius(15)
-                    .padding(.top, 20)
-                }
-                
-                Spacer()
                 
                 // Analysis Results Overlay with Liquid Glass
                 if showAnalysisResults && !analysisResultText.isEmpty {
@@ -180,46 +130,45 @@ struct LiveView: View {
                 }
                 
                 Spacer()
-                
-                // Bottom Controls
-                VStack(spacing: 20) {
-                    if !isAnalysisMode {
-                        Button(action: { showAnalysisOptions = true }) {
-                            HStack {
-                                Image(systemName: "waveform.path.ecg")
-                                    .font(.title2)
-                                Text("Live Analyse starten")
-                                    .font(.headline)
-                            }
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 30)
-                            .padding(.vertical, 15)
-                            .interactiveLiquidGlass(cornerRadius: 25)
+
+                // Bottom Controls with Liquid Glass
+                if !isAnalysisMode {
+                    Button(action: startAnalysis) {
+                        HStack {
+                            Image(systemName: "waveform.path.ecg")
+                                .font(.title2)
+                            Text("Live Analyse starten")
+                                .font(.headline)
                         }
-                        .disabled(!cameraManager.isCameraReady)
-                        .opacity(cameraManager.isCameraReady ? 1.0 : 0.6)
-                    } else {
-                        VStack(spacing: 15) {
-                            // Status indicator
-                            Text(cameraManager.poseDetectionStatus)
-                                .font(.caption)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 30)
+                        .padding(.vertical, 15)
+                        .interactiveLiquidGlass(cornerRadius: 25)
+                    }
+                    .disabled(!cameraManager.isCameraReady)
+                    .opacity(cameraManager.isCameraReady ? 1.0 : 0.6)
+                    .padding(.bottom, 20)
+                } else {
+                    VStack(spacing: 15) {
+                        // Status indicator
+                        Text(cameraManager.poseDetectionStatus)
+                            .font(.caption)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 8)
+                            .background(Color.black.opacity(0.5))
+                            .cornerRadius(20)
+
+                        // Stop Analysis
+                        Button(action: stopAnalysis) {
+                            Text("Analyse beenden")
                                 .foregroundColor(.white)
                                 .padding(.horizontal, 20)
-                                .padding(.vertical, 8)
-                                .background(Color.black.opacity(0.5))
+                                .padding(.vertical, 10)
+                                .background(Color.gray)
                                 .cornerRadius(20)
-                            
-                            // Stop Analysis
-                            Button(action: stopAnalysis) {
-                                Text("Analyse beenden")
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 20)
-                                    .padding(.vertical, 10)
-                                    .background(Color.gray)
-                                    .cornerRadius(20)
-                            }
                         }
-                        
+
                         // Frame count indicator
                         if let trajectory = hammerTracker.currentTrajectory, trajectory.frames.count > 0 {
                             Text("\(trajectory.frames.count) Hammer-Frames erkannt")
@@ -231,63 +180,26 @@ struct LiveView: View {
                                 .cornerRadius(10)
                         }
                     }
-                    
-                    // Camera Settings
-                    VStack(spacing: 15) {
-                        // Zoom Controls
-                        HStack(spacing: 10) {
-                            ForEach(cameraManager.availableZoomFactors, id: \.self) { factor in
-                                Button(action: {
-                                    cameraManager.setZoomFactor(factor)
-                                }) {
-                                    Text("\(factor, specifier: "%.1f")x")
-                                        .font(.system(size: 14, weight: cameraManager.currentZoomFactor == factor ? .bold : .regular))
-                                        .foregroundColor(cameraManager.currentZoomFactor == factor ? .black : .white)
-                                        .frame(width: 45, height: 35)
-                                        .background(cameraManager.currentZoomFactor == factor ? Color.white : Color.black.opacity(0.5))
-                                        .cornerRadius(8)
-                                }
-                            }
-                        }
-                        
-                        HStack(spacing: 20) {
-                            // Flash Toggle
-                            Button(action: {
-                                cameraManager.toggleFlash()
-                            }) {
-                                Image(systemName: cameraManager.flashMode == .on ? "bolt.fill" : "bolt.slash.fill")
-                                    .font(.title2)
-                                    .foregroundColor(.white)
-                                    .frame(width: 50, height: 50)
-                                    .background(Color.black.opacity(0.5))
-                                    .clipShape(Circle())
-                            }
-                            
-                            // Camera Switch
-                            Button(action: {
-                                cameraManager.switchCamera()
-                            }) {
-                                Image(systemName: "camera.rotate")
-                                    .font(.title2)
-                                    .foregroundColor(.white)
-                                    .frame(width: 50, height: 50)
-                                    .background(Color.black.opacity(0.5))
-                                    .clipShape(Circle())
-                            }
-                        }
-                    }
+                    .padding(.bottom, 20)
                 }
-                .padding(.bottom, 40)
+
+                // Camera Controls Panel (same style as SingleView VideoControlsView)
+                CameraControlsView(cameraManager: cameraManager)
+                    .frame(maxWidth: 500)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 20)
             }
+            .frame(maxHeight: .infinity, alignment: .top)  // VStack nimmt volle Höhe ein, Elemente oben ausgerichtet
+            .ignoresSafeArea(edges: .bottom)  // Ignoriere Safe Area unten, damit 20px wirklich zum physischen Bildschirmrand sind
             }
         }
         .navigationBarHidden(true)
         .onAppear {
             print("📱 LiveView appeared - initializing camera...")
             
-            // Setup the tracker and analysis mode
+            // Setup the tracker and analysis mode (immer "both")
             cameraManager.hammerTracker = hammerTracker
-            cameraManager.analysisMode = selectedAnalysisMode
+            cameraManager.analysisMode = .both
             cameraManager.onAnalysisComplete = { results in
                 self.analysisResultText = results
                 withAnimation {
@@ -323,32 +235,12 @@ struct LiveView: View {
         } message: {
             Text("Diese App benötigt Zugriff auf die Kamera für die Live-Analyse.")
         }
-        .overlay(
-            // Analysis Options Modal
-            Group {
-                if showAnalysisOptions {
-                    Color.black.opacity(0.5)
-                        .ignoresSafeArea()
-                        .onTapGesture {
-                            showAnalysisOptions = false
-                        }
-                    
-                    AnalysisOptionsView(
-                        selectedMode: $selectedAnalysisMode,
-                        showOptions: $showAnalysisOptions,
-                        onStart: startAnalysis
-                    )
-                    .transition(.scale.combined(with: .opacity))
-                }
-            }
-            .animation(.spring(), value: showAnalysisOptions)
-        )
     }
-    
+
     private func startAnalysis() {
         withAnimation {
             isAnalysisMode = true
-            cameraManager.analysisMode = selectedAnalysisMode
+            cameraManager.analysisMode = .both
             cameraManager.startLiveAnalysis()
         }
     }
@@ -377,9 +269,10 @@ class CameraManager: NSObject, ObservableObject {
 
     // Pose visualization
     @Published var detectedPose: VNHumanBodyPoseObservation?
+    @Published var isPoseDetectionEnabled: Bool = true
 
-    // Analysis mode
-    var analysisMode: AnalysisMode = .trajectory
+    // Analysis mode (immer "both")
+    var analysisMode: AnalysisMode = .both
     
     private var output = AVCaptureMovieFileOutput()
     private var videoDataOutput = AVCaptureVideoDataOutput()
@@ -446,13 +339,15 @@ class CameraManager: NSObject, ObservableObject {
     }
     
     private func processPoseObservation(_ observation: VNHumanBodyPoseObservation) {
-        // Update detected pose for visualization
-        DispatchQueue.main.async { [weak self] in
-            self?.detectedPose = observation
+        // Update detected pose for visualization (nur wenn enabled)
+        if isPoseDetectionEnabled {
+            DispatchQueue.main.async { [weak self] in
+                self?.detectedPose = observation
+            }
         }
 
         // Check for arm raised (with sound feedback only, no auto-start)
-        if analysisMode == .trajectory || analysisMode == .both {
+        if isPoseDetectionEnabled && (analysisMode == .trajectory || analysisMode == .both) {
             do {
                 // Get right wrist position (kann auch left wrist nehmen)
                 let rightWrist = try observation.recognizedPoint(.rightWrist)
@@ -905,17 +800,17 @@ class CameraManager: NSObject, ObservableObject {
     
     func switchCamera() {
         session.beginConfiguration()
-        
+
         if let input = videoDeviceInput {
             session.removeInput(input)
         }
-        
+
         let position: AVCaptureDevice.Position = currentCamera?.position == .back ? .front : .back
         guard let newCamera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) else {
             session.commitConfiguration()
             return
         }
-        
+
         do {
             let newInput = try AVCaptureDeviceInput(device: newCamera)
             if session.canAddInput(newInput) {
@@ -926,9 +821,22 @@ class CameraManager: NSObject, ObservableObject {
         } catch {
             print("Error switching camera: \(error)")
         }
-        
+
         session.commitConfiguration()
         updateAvailableZoomFactors()
+    }
+
+    func togglePoseDetection() {
+        isPoseDetectionEnabled.toggle()
+
+        // Clear pose visualization wenn disabled
+        if !isPoseDetectionEnabled {
+            DispatchQueue.main.async {
+                self.detectedPose = nil
+            }
+        }
+
+        print("Pose detection \(isPoseDetectionEnabled ? "enabled" : "disabled")")
     }
 }
 
@@ -946,11 +854,11 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         
         guard frameProcessingCounter >= frameProcessingInterval else { return }
         frameProcessingCounter = 0
-        
-        if isAnalyzing && poseRequest != nil {
+
+        if isAnalyzing && isPoseDetectionEnabled && poseRequest != nil {
             visionProcessingQueue.async { [weak self] in
                 guard let self = self else { return }
-                
+
                 let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .right, options: [:])
                 do {
                     try handler.perform([self.poseRequest!])
@@ -1210,5 +1118,109 @@ struct FocusIndicatorView: View {
                     animating = true
                 }
             }
+    }
+}
+
+// Camera Controls View - Kompakte einzeilige Version
+struct CameraControlsView: View {
+    @ObservedObject var cameraManager: CameraManager
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Zoom Controls links
+            zoomControls
+
+            Spacer()
+
+            // Pose Detection + Flash + Camera Switch rechts
+            poseDetectionButton
+            flashButton
+            switchButton
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .liquidGlassEffect(style: .thin, cornerRadius: 16)
+    }
+
+    // Zoom Controls
+    private var zoomControls: some View {
+        HStack(spacing: 8) {
+            ForEach(cameraManager.availableZoomFactors, id: \.self) { factor in
+                zoomButton(for: factor)
+            }
+        }
+    }
+
+    private func zoomButton(for factor: CGFloat) -> some View {
+        let isSelected = cameraManager.currentZoomFactor == factor
+
+        return Button(action: {
+            cameraManager.setZoomFactor(factor)
+        }) {
+            Text(formatZoomFactor(factor))
+                .font(.system(size: 13, weight: isSelected ? .bold : .regular))
+                .foregroundColor(isSelected ? .black : .white)
+                .frame(minWidth: 44)
+                .frame(height: 38)
+                .background(isSelected ? Color.white : Color.white.opacity(0.1))
+                .cornerRadius(8)
+        }
+    }
+
+    private var poseDetectionButton: some View {
+        let isPoseOn = cameraManager.isPoseDetectionEnabled
+        let iconName = isPoseOn ? "figure.walk" : "figure.walk.slash"
+        let bgColor = isPoseOn ? LiquidGlassColors.primary : Color.white.opacity(0.1)
+
+        return Button(action: {
+            cameraManager.togglePoseDetection()
+        }) {
+            Image(systemName: iconName)
+                .font(.system(size: 18))
+                .foregroundColor(.white)
+                .frame(width: 38, height: 38)
+                .background(Circle().fill(bgColor))
+                .overlay(Circle().stroke(LiquidGlassColors.glassBorder, lineWidth: 1.5))
+        }
+    }
+
+    private var flashButton: some View {
+        let isFlashOn = cameraManager.flashMode == .on
+        let iconName = isFlashOn ? "bolt.fill" : "bolt.slash.fill"
+        let bgColor = isFlashOn ? LiquidGlassColors.primary : Color.white.opacity(0.1)
+
+        return Button(action: {
+            cameraManager.toggleFlash()
+        }) {
+            Image(systemName: iconName)
+                .font(.system(size: 18))
+                .foregroundColor(.white)
+                .frame(width: 38, height: 38)
+                .background(Circle().fill(bgColor))
+                .overlay(Circle().stroke(LiquidGlassColors.glassBorder, lineWidth: 1.5))
+        }
+    }
+
+    private var switchButton: some View {
+        Button(action: {
+            cameraManager.switchCamera()
+        }) {
+            Image(systemName: "camera.rotate")
+                .font(.system(size: 18))
+                .foregroundColor(.white)
+                .frame(width: 38, height: 38)
+                .background(Circle().fill(Color.white.opacity(0.1)))
+                .overlay(Circle().stroke(LiquidGlassColors.glassBorder, lineWidth: 1.5))
+        }
+    }
+
+    private func formatZoomFactor(_ factor: CGFloat) -> String {
+        if factor < 1.0 {
+            return String(format: "%.1fx", factor)
+        } else if factor.truncatingRemainder(dividingBy: 1.0) == 0 {
+            return String(format: "%.0fx", factor)
+        } else {
+            return String(format: "%.1fx", factor)
+        }
     }
 }

@@ -170,11 +170,15 @@ struct ZoomableVideoView: UIViewRepresentable {
                 return
             }
             
-            // iOS Galerie-Style: aspect fill bei Zoom 1.0, aspect fit bei minimumZoomScale
+            // iOS Galerie-Style: Video füllt immer die volle Breite
+            // WICHTIG: Keine schwarzen Ränder links/rechts!
             let containerAspect = bounds.width / bounds.height
             let videoAspect = videoSize.width / videoSize.height
 
-            // Berechne aspect FILL Skalierung (Standard-Ansicht, Video füllt Bildschirm)
+            // Berechne FIT nach BREITE (Video immer volle Breite) - DAS ist die Basis-Größe!
+            let fitScale = bounds.width / videoSize.width
+
+            // Berechne aspect FILL Skalierung (für maximales Zoom)
             let fillScale: CGFloat
             if containerAspect > videoAspect {
                 fillScale = bounds.width / videoSize.width
@@ -182,17 +186,17 @@ struct ZoomableVideoView: UIViewRepresentable {
                 fillScale = bounds.height / videoSize.height
             }
 
-            // Berechne aspect FIT Skalierung (Video komplett sichtbar)
-            // WICHTIG: Immer nach BREITE skalieren, damit Video links/rechts am Rand ist
-            // Schwarze Balken nur oben/unten erlaubt!
-            let fitScale = bounds.width / videoSize.width
+            // minimumZoomScale = 1.0 (keine Verkleinerung vom FIT erlaubt!)
+            scrollView.minimumZoomScale = 1.0
 
-            // minimumZoomScale: Wie weit muss man rauszoomen um von fill zu fit zu kommen?
-            let minZoomScale = fitScale / fillScale
-            scrollView.minimumZoomScale = max(minZoomScale, 0.1) // Mindestens 0.1 als Sicherheit
+            // maximumZoomScale = Zoom bis zum aspect FILL und darüber hinaus
+            let maxZoomScale = max(fillScale / fitScale, 1.0) * 10.0
+            scrollView.maximumZoomScale = maxZoomScale
 
-            // Video-Container in aspect fill Größe
-            let scaledSize = CGSize(width: videoSize.width * fillScale, height: videoSize.height * fillScale)
+            // Video-Container in FIT Größe (volle Breite) - Basis für Zoom
+            let scaledSize = CGSize(width: videoSize.width * fitScale, height: videoSize.height * fitScale)
+
+            // Video horizontal zentriert (nimmt volle Breite ein)
             let videoRect = CGRect(
                 x: (bounds.width - scaledSize.width) / 2,
                 y: (bounds.height - scaledSize.height) / 2,
@@ -231,8 +235,13 @@ struct ZoomableVideoView: UIViewRepresentable {
             let zoomedWidth = scrollView.contentSize.width * scrollView.zoomScale
             let zoomedHeight = scrollView.contentSize.height * scrollView.zoomScale
 
-            // Berechne Offset - Video soll immer links/rechts am Rand sein
+            // Berechne Offsets
+            // HORIZONTAL: Video soll IMMER zentriert sein (volle Breite oder größer)
+            // Bei minZoom: Video nimmt exakt volle Breite ein (kein offset nötig)
+            // Bei größerem Zoom: Video wird zentriert wenn kleiner als bounds
             let offsetX = max((scrollView.bounds.width - zoomedWidth) * 0.5, 0)
+
+            // VERTIKAL: Video zentrieren wenn kleiner als bounds (oben/unten schwarze Balken erlaubt)
             let offsetY = max((scrollView.bounds.height - zoomedHeight) * 0.5, 0)
 
             // Nur setzen wenn sich was geändert hat (Performance)
