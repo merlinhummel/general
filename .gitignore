@@ -103,3 +103,17 @@ old_git*/
 .claude-flow/
 .swarm/
 *.log
+
+# Instruments traces
+*.trace/
+*.trace
+
+# Provisioning profiles
+*.mobileprovision
+*.provisionprofile
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*~
