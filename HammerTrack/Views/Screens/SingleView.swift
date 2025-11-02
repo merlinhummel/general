@@ -25,47 +25,113 @@ struct SingleView: View {
     @State private var selectedEllipseIndex: Int? = nil  // Welche Ellipse ist ausgewählt (0-basiert)
     @State private var ellipseViewMode: Bool = false  // Nur ausgewählte Ellipse anzeigen?
 
+    // PLAYBACK SPEED (Persistent Storage)
+    @AppStorage("playbackSpeed") private var playbackSpeedStorage: Double = 1.0
+    @State private var hasTriggeredSwipe = false
+
+    // Loading Animation
+    @State private var isLoadingVideo = false
+    @State private var rotationAngle: Double = 0
+
+    // Helper for Float conversion
+    private var playbackSpeed: Float {
+        get { Float(playbackSpeedStorage) }
+        nonmutating set { playbackSpeedStorage = Double(newValue) }
+    }
+
     @Environment(\.presentationMode) var presentationMode
     
     var body: some View {
         ZStack {
-            // Background layer: Video (fullscreen including Dynamic Island area)
+            // Background
+            Color.black
+                .ignoresSafeArea()
+
+            // Video layer - Apple Gallery style (full width, vertically centered)
             if let player = player {
-                ZoomableVideoView(
-                    player: player,
-                    trajectory: showTrajectory ? hammerTracker.currentTrajectory : nil,
-                    currentTime: $currentTime,
-                    showFullTrajectory: false,
-                    showTrajectory: showTrajectory,
-                    selectedEllipseIndex: ellipseViewMode ? (isPlaying ? currentEllipseIndex.map { $0 - 1 } : selectedEllipseIndex) : nil,
-                    analysisResult: hammerTracker.analysisResult,
-                    onEllipseTapped: { tappedIndex in
-                        if let index = tappedIndex {
-                            // Ellipse getippt → Aktiviere Ellipsen-Modus
-                            selectedEllipseIndex = index
-                            ellipseViewMode = true
-                            // Springe zur getippten Ellipse
-                            seekToEllipse(index: index)
-                        } else {
-                            // Außerhalb getippt → Deaktiviere Ellipsen-Modus
-                            ellipseViewMode = false
-                            selectedEllipseIndex = nil
+                GeometryReader { geometry in
+                    ZoomableVideoView(
+                        player: player,
+                        trajectory: showTrajectory ? hammerTracker.currentTrajectory : nil,
+                        currentTime: $currentTime,
+                        showFullTrajectory: false,
+                        showTrajectory: showTrajectory,
+                        selectedEllipseIndex: ellipseViewMode ? (isPlaying ? currentEllipseIndex.map { $0 - 1 } : selectedEllipseIndex) : nil,
+                        analysisResult: hammerTracker.analysisResult,
+                        onEllipseTapped: { tappedIndex in
+                            if let index = tappedIndex {
+                                // Ellipse getippt → Aktiviere Ellipsen-Modus
+                                selectedEllipseIndex = index
+                                ellipseViewMode = true
+                                // Springe zur getippten Ellipse
+                                seekToEllipse(index: index)
+                            } else {
+                                // Außerhalb getippt → Deaktiviere Ellipsen-Modus
+                                ellipseViewMode = false
+                                selectedEllipseIndex = nil
+                            }
                         }
-                    }
-                )
-                .ignoresSafeArea(.all, edges: .all)
-                .background(Color.black)
+                    )
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                }
+                .ignoresSafeArea()
             } else {
                 // Empty state background
                 LiquidGlassBackground()
-                    .ignoresSafeArea(.all, edges: .all)
+                    .ignoresSafeArea()
+            }
+
+            // Empty state content - absolut zentriert in Bildschirmmitte (wie Compare View)
+            if player == nil {
+                VStack(spacing: 20) {
+                    // Rotierendes Zahnrad beim Laden, sonst normales Icon
+                    ZStack {
+                        if isLoadingVideo {
+                            Image(systemName: "gearshape.fill")
+                                .font(.system(size: 60))
+                                .foregroundColor(.white.opacity(0.8))
+                                .rotationEffect(.degrees(rotationAngle))
+                                .onAppear {
+                                    // Starte endlose Rotation
+                                    withAnimation(Animation.linear(duration: 2).repeatForever(autoreverses: false)) {
+                                        rotationAngle = 360
+                                    }
+                                }
+                        } else {
+                            Image(systemName: "video.fill")
+                                .font(.system(size: 60))
+                                .foregroundColor(.white.opacity(0.8))
+                        }
+                    }
+
+                    Text(isLoadingVideo ? "Video wird verarbeitet..." : "Wählen Sie ein Video aus")
+                        .font(.headline)
+                        .foregroundColor(.white)
+
+                    if !isLoadingVideo {
+                        Button(action: {
+                            showingVideoPicker = true
+                        }) {
+                            Text("Video auswählen")
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 30)
+                                .padding(.vertical, 15)
+                                .interactiveLiquidGlass(cornerRadius: 15)
+                        }
+                    }
+                }
+                .onChange(of: isLoadingVideo) { _, loading in
+                    if loading {
+                        rotationAngle = 0  // Reset rotation
+                    }
+                }
             }
 
             // Overlay layer: UI elements
             VStack(spacing: 0) {
-                // Header with individual Liquid Glass buttons
+                // Header with iOS 26 Glass buttons
                 HStack {
-                    // Back button as Liquid Glass
+                    // Back button - iOS 26 Interactive Glass
                     Button(action: {
                         if player != nil {
                             // Reset player and go back to selection
@@ -85,12 +151,12 @@ struct SingleView: View {
                         .foregroundColor(.white)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
-                        .liquidGlassEffect(style: .thin, cornerRadius: 12)
                     }
+                    .interactiveLiquidGlass(cornerRadius: 12)
 
                     Spacer()
 
-                    // Title as Liquid Glass button
+                    // Title with iOS 26 Glass
                     Text("Single View")
                         .font(.system(size: 16, weight: .medium))
                         .foregroundColor(.white)
@@ -104,76 +170,35 @@ struct SingleView: View {
                     Color.clear
                         .frame(width: 80, height: 20)
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 20)  // Gleicher Abstand wie Player unten
                 .padding(.vertical, 12)
                 .padding(.top, 0) // Allow it to reach top edge
 
                 Spacer()
 
-                // Middle content: Processing overlay and trajectory toggle
+                // Middle content: Processing overlay only (wenn Video geladen)
                 if let player = player {
-                    ZStack {
-                        // Processing overlay with Liquid Glass
-                        if hammerTracker.isProcessing {
-                            VStack(spacing: 20) {
-                                ProgressView()
-                                    .scaleEffect(1.5)
-                                    .tint(.white)
+                    // Processing overlay with Liquid Glass
+                    if hammerTracker.isProcessing {
+                        VStack(spacing: 20) {
+                            ProgressView()
+                                .scaleEffect(1.5)
+                                .tint(.white)
 
-                                Text("Analysiere Video...")
-                                    .font(.headline)
-                                    .foregroundColor(.white)
-
-                                ProgressView(value: hammerTracker.progress)
-                                    .frame(width: 200)
-                                    .tint(LiquidGlassColors.accent)
-
-                                Text("\(Int(hammerTracker.progress * 100))%")
-                                    .font(.caption)
-                                    .foregroundColor(.white)
-                            }
-                            .padding(30)
-                            .floatingGlassCard(cornerRadius: 20)
-                        }
-
-                        // Trajectory toggle only (no ellipse info)
-                        VStack {
-                            Spacer()
-
-                            HStack {
-                                Spacer()
-                                Button(action: { showTrajectory.toggle() }) {
-                                    Image(systemName: showTrajectory ? "eye" : "eye.slash")
-                                        .font(.system(size: 16))
-                                        .foregroundColor(.white)
-                                        .frame(width: 36, height: 36)
-                                        .liquidGlassEffect(style: .thin, cornerRadius: 18)
-                                }
-                                .padding(.trailing, 12)
-                                .padding(.bottom, 12)
-                            }
-                        }
-                    }
-                } else {
-                    // Empty state content
-                    VStack(spacing: 20) {
-                        Image(systemName: "video.fill")
-                            .font(.system(size: 60))
-                            .foregroundColor(.white.opacity(0.8))
-
-                        Text("Wählen Sie ein Video aus")
-                            .font(.headline)
-                            .foregroundColor(.white)
-
-                        Button(action: {
-                            showingVideoPicker = true
-                        }) {
-                            Text("Video auswählen")
+                            Text("Analysiere Video...")
+                                .font(.headline)
                                 .foregroundColor(.white)
-                                .padding(.horizontal, 30)
-                                .padding(.vertical, 15)
-                                .interactiveLiquidGlass(cornerRadius: 15)
+
+                            ProgressView(value: hammerTracker.progress)
+                                .frame(width: 200)
+                                .tint(LiquidGlassColors.accent)
+
+                            Text("\(Int(hammerTracker.progress * 100))%")
+                                .font(.caption)
+                                .foregroundColor(.white)
                         }
+                        .padding(30)
+                        .floatingGlassCard(cornerRadius: 20)
                     }
                 }
 
@@ -186,6 +211,12 @@ struct SingleView: View {
                         isPlaying: $isPlaying,
                         currentTime: $currentTime,
                         duration: $duration,
+                        playbackSpeed: Binding(
+                            get: { Float(playbackSpeedStorage) },
+                            set: { playbackSpeedStorage = Double($0) }
+                        ),
+                        hasTriggeredSwipe: $hasTriggeredSwipe,
+                        showTrajectory: $showTrajectory,
                         currentEllipseAngle: currentEllipseAngle,
                         currentEllipseIndex: currentEllipseIndex,
                         totalEllipses: totalEllipses,
@@ -203,13 +234,31 @@ struct SingleView: View {
             .ignoresSafeArea(edges: .bottom)  // Ignoriere Safe Area unten, damit 20px wirklich zum physischen Bildschirmrand sind
         }
         .navigationBarHidden(true)
-        .sheet(isPresented: $showingVideoPicker) {
-            VideoPicker(selectedVideoURL: $selectedVideoURL)
+        .sheet(isPresented: $showingVideoPicker, onDismiss: {
+            // Wenn Video ausgewählt wurde, starte Loading-Animation
+            if selectedVideoURL != nil {
+                isLoadingVideo = true
+            }
+        }) {
+            VideoPicker(selectedVideoURL: $selectedVideoURL, isLoadingVideo: $isLoadingVideo)
         }
         .onChange(of: selectedVideoURL) { _, newURL in
             if let url = newURL {
                 setupPlayer(with: url)
                 processVideo(url: url)
+            }
+        }
+        .onChange(of: isPlaying) { _, playing in
+            if playing {
+                player?.rate = playbackSpeed
+                player?.play()
+            } else {
+                player?.pause()
+            }
+        }
+        .onChange(of: playbackSpeed) { _, newSpeed in
+            if isPlaying {
+                player?.rate = newSpeed
             }
         }
         .onDisappear {
@@ -221,14 +270,14 @@ struct SingleView: View {
     
     private func setupPlayer(with url: URL) {
         player = AVPlayer(url: url)
-        
+
         // Get video duration and size
         let asset = AVURLAsset(url: url)
         Task {
             do {
                 let duration = try await asset.load(.duration)
                 self.duration = duration.seconds
-                
+
                 if let track = asset.tracks(withMediaType: .video).first {
                     let size = try await track.load(.naturalSize)
                     let transform = try await track.load(.preferredTransform)
@@ -236,8 +285,16 @@ struct SingleView: View {
                     // Use absolute values to ensure positive dimensions
                     self.videoSize = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
                 }
+
+                // Loading fertig - Animation ausblenden
+                await MainActor.run {
+                    self.isLoadingVideo = false
+                }
             } catch {
                 print("Error loading duration: \(error)")
+                await MainActor.run {
+                    self.isLoadingVideo = false
+                }
             }
         }
         
@@ -315,6 +372,7 @@ struct SingleView: View {
 
 struct VideoPicker: UIViewControllerRepresentable {
     @Binding var selectedVideoURL: URL?
+    @Binding var isLoadingVideo: Bool
     @Environment(\.presentationMode) var presentationMode
     
     func makeUIViewController(context: Context) -> PHPickerViewController {
@@ -341,19 +399,38 @@ struct VideoPicker: UIViewControllerRepresentable {
         }
         
         func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            // Wenn Video ausgewählt wurde, aktiviere Loading sofort
+            if !results.isEmpty {
+                parent.isLoadingVideo = true
+            }
+
             parent.presentationMode.wrappedValue.dismiss()
-            
+
             guard let provider = results.first?.itemProvider else { return }
-            
+
             if provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
                 provider.loadFileRepresentation(forTypeIdentifier: UTType.movie.identifier) { url, error in
                     if let url = url {
                         // Copy to temporary location
                         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
-                        try? FileManager.default.copyItem(at: url, to: tempURL)
-                        
+                        do {
+                            // Falls Datei existiert, erst löschen
+                            try? FileManager.default.removeItem(at: tempURL)
+                            // Kopieren
+                            try FileManager.default.copyItem(at: url, to: tempURL)
+
+                            DispatchQueue.main.async {
+                                self.parent.selectedVideoURL = tempURL
+                            }
+                        } catch {
+                            print("❌ Error copying video file: \(error)")
+                            DispatchQueue.main.async {
+                                self.parent.isLoadingVideo = false
+                            }
+                        }
+                    } else {
                         DispatchQueue.main.async {
-                            self.parent.selectedVideoURL = tempURL
+                            self.parent.isLoadingVideo = false
                         }
                     }
                 }
@@ -367,6 +444,9 @@ struct VideoControlsView: View {
     @Binding var isPlaying: Bool
     @Binding var currentTime: Double
     @Binding var duration: Double
+    @Binding var playbackSpeed: Float
+    @Binding var hasTriggeredSwipe: Bool
+    @Binding var showTrajectory: Bool
     let currentEllipseAngle: Double?
     let currentEllipseIndex: Int?
     let totalEllipses: Int
@@ -380,12 +460,22 @@ struct VideoControlsView: View {
     @State private var isDraggingSlider = false
     @State private var frameStepTimer: Timer?
     @State private var frameStepCount = 0
-    
+
+    // Haptisches Feedback
+    private let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+
+    // Speed arrays
+    private let speedsUp: [Float] = [1.0, 1.25, 1.5, 1.75, 2.0]
+    private let speedsDown: [Float] = [1.0, 0.8, 0.7, 0.6, 0.5]
+    private var allSpeeds: [Float] {
+        Array(Set(speedsUp + speedsDown)).sorted()
+    }
+
     var body: some View {
         ZStack(alignment: .top) {
             // Main player controls
-            VStack(spacing: 8) {
-                // Timeline
+            VStack(spacing: 6) {
+                // Timeline - dünner
                 Slider(
                     value: Binding(
                         get: { currentTime },
@@ -404,7 +494,7 @@ struct VideoControlsView: View {
                     }
                 }
                 .tint(LiquidGlassColors.accent)
-                .frame(height: 20)
+                .frame(height: 16)
 
                 // Time labels
                 HStack {
@@ -419,12 +509,13 @@ struct VideoControlsView: View {
                         .foregroundColor(.white.opacity(0.8))
                 }
 
-                // Fixed control buttons on one line
+                // Control buttons - Simple Compare View Style
                 HStack(spacing: 15) {
-                    // Ellipse backward button (ganz links)
-                    Button(action: {
-                        previousEllipse()
-                    }) {
+                    // Speed Control (links)
+                    speedButton()
+
+                    // Ellipse backward
+                    Button(action: previousEllipse) {
                         Image(systemName: "chevron.left.2")
                             .font(.title3)
                             .foregroundColor(canGoPreviousEllipse() ? .white : .white.opacity(0.3))
@@ -441,15 +532,8 @@ struct VideoControlsView: View {
                             .foregroundColor(.white)
                             .frame(width: 44, height: 50)
                     }
-                    .onLongPressGesture(minimumDuration: 0.2, maximumDistance: .infinity, pressing: { pressing in
-                        if pressing {
-                            startFrameStepping(forward: false)
-                        } else {
-                            stopFrameStepping()
-                        }
-                    }, perform: {})
 
-                    // Play/Pause button - fixed position
+                    // Play/Pause button
                     Button(action: togglePlayPause) {
                         Image(systemName: isPlaying ? "pause.fill" : "play.fill")
                             .font(.title2)
@@ -475,30 +559,49 @@ struct VideoControlsView: View {
                             .foregroundColor(.white)
                             .frame(width: 44, height: 50)
                     }
-                    .onLongPressGesture(minimumDuration: 0.2, maximumDistance: .infinity, pressing: { pressing in
-                        if pressing {
-                            startFrameStepping(forward: true)
-                        } else {
-                            stopFrameStepping()
-                        }
-                    }, perform: {})
 
-                    // Ellipse forward button (ganz rechts)
-                    Button(action: {
-                        nextEllipse()
-                    }) {
+                    // Ellipse forward
+                    Button(action: nextEllipse) {
                         Image(systemName: "chevron.right.2")
                             .font(.title3)
                             .foregroundColor(canGoNextEllipse() ? .white : .white.opacity(0.3))
                             .frame(width: 38, height: 50)
                     }
                     .disabled(!canGoNextEllipse())
+
+                    // Trajectory toggle (rechts)
+                    Button(action: {
+                        showTrajectory.toggle()
+                    }) {
+                        Image(systemName: showTrajectory ? "eye" : "eye.slash")
+                            .font(.system(size: 16))
+                            .foregroundColor(showTrajectory ? LiquidGlassColors.accent : .white.opacity(0.7))
+                            .frame(width: 36, height: 36)
+                    }
                 }
-                .frame(height: 50) // Fixed height for button row
+                .frame(height: 50)
             }
-            .padding(.vertical, 10)
-            .padding(.horizontal, 12)
-            .liquidGlassEffect(style: .thin, cornerRadius: 16)
+            .padding(.vertical, 8)
+            .padding(.horizontal, 16)
+            .background(
+                RoundedRectangle(cornerRadius: 18)
+                    .fill(Color.white.opacity(0.12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18)
+                            .stroke(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(0.3),
+                                        Color.white.opacity(0.1)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1.5
+                            )
+                    )
+                    .shadow(color: Color.white.opacity(0.12), radius: 10, x: 0, y: 5)
+            )
 
             // Ellipse info overlay - floats above controls without shifting them
             if ellipseViewMode,
@@ -527,10 +630,28 @@ struct VideoControlsView: View {
                             .foregroundColor(ellipse.angle > 0 ? LiquidGlassColors.accent : LiquidGlassColors.primary)
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .liquidGlassEffect(style: .thin, cornerRadius: 10)
-                .offset(y: -45) // Float above the controls
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.white.opacity(0.15))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(
+                                    LinearGradient(
+                                        colors: [
+                                            Color.white.opacity(0.4),
+                                            Color.white.opacity(0.15)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ),
+                                    lineWidth: 1.5
+                                )
+                        )
+                        .shadow(color: LiquidGlassColors.accent.opacity(0.2), radius: 12, x: 0, y: 4)
+                )
+                .offset(y: -50)
             } else if let angle = currentEllipseAngle,
                       let index = currentEllipseIndex,
                       totalEllipses > 0 {
@@ -555,18 +676,54 @@ struct VideoControlsView: View {
                             .foregroundColor(angle > 0 ? LiquidGlassColors.accent : LiquidGlassColors.primary)
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .liquidGlassEffect(style: .thin, cornerRadius: 10)
-                .offset(y: -45) // Float above the controls
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.white.opacity(0.15))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(
+                                    LinearGradient(
+                                        colors: [
+                                            Color.white.opacity(0.4),
+                                            Color.white.opacity(0.15)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ),
+                                    lineWidth: 1.5
+                                )
+                        )
+                        .shadow(color: LiquidGlassColors.accent.opacity(0.2), radius: 12, x: 0, y: 4)
+                )
+                .offset(y: -50)
             } else if totalEllipses > 0 {
                 Text("Zwischen Ellipsen")
                     .font(.caption2)
                     .foregroundColor(.white.opacity(0.8))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .liquidGlassEffect(style: .thin, cornerRadius: 10)
-                    .offset(y: -45)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.white.opacity(0.15))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(
+                                        LinearGradient(
+                                            colors: [
+                                                Color.white.opacity(0.4),
+                                                Color.white.opacity(0.15)
+                                            ],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        ),
+                                        lineWidth: 1.5
+                                    )
+                            )
+                            .shadow(color: LiquidGlassColors.accent.opacity(0.2), radius: 12, x: 0, y: 4)
+                    )
+                    .offset(y: -50)
             }
         }
         .onChange(of: isPlaying) { _, playing in
@@ -582,7 +739,124 @@ struct VideoControlsView: View {
             }
         }
     }
-    
+
+    // MARK: - Speed Control Button (iOS 26 Interactive Glass)
+    @ViewBuilder
+    private func speedButton() -> some View {
+        SpeedControlButton(
+            playbackSpeed: $playbackSpeed,
+            hasTriggeredSwipe: $hasTriggeredSwipe,
+            isPlaying: isPlaying,
+            player: player,
+            formatSpeed: formatSpeed,
+            changeSpeedOneStep: changeSpeedOneStep,
+            allSpeeds: allSpeeds
+        )
+    }
+}
+
+// MARK: - Speed Control Button Component (Simple Compare View Style)
+struct SpeedControlButton: View {
+    @Binding var playbackSpeed: Float
+    @Binding var hasTriggeredSwipe: Bool
+    let isPlaying: Bool
+    let player: AVPlayer
+    let formatSpeed: (Float) -> String
+    let changeSpeedOneStep: (Float, Int) -> Float
+    let allSpeeds: [Float]
+
+    private let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+
+    var body: some View {
+        Text("\(formatSpeed(playbackSpeed))x")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundColor(.white)
+            .frame(width: 44, height: 44)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let verticalMovement = value.translation.height
+                        let threshold: CGFloat = verticalMovement < 0 ? 3 : 1.5
+
+                        if abs(verticalMovement) >= threshold && !hasTriggeredSwipe {
+                            hasTriggeredSwipe = true
+                            impactFeedback.prepare()
+
+                            let direction = verticalMovement < 0 ? 1 : -1
+                            let newSpeed = changeSpeedOneStep(playbackSpeed, direction)
+                            playbackSpeed = newSpeed
+
+                            if isPlaying {
+                                player.rate = newSpeed
+                            }
+
+                            impactFeedback.impactOccurred()
+                        }
+                    }
+                    .onEnded { value in
+                        let verticalMovement = value.translation.height
+
+                        if !hasTriggeredSwipe && abs(verticalMovement) < 3 {
+                            // Tap resets to 1.0x
+                            playbackSpeed = 1.0
+                            if isPlaying {
+                                player.rate = 1.0
+                            }
+                            impactFeedback.impactOccurred(intensity: 0.7)
+                        }
+
+                        hasTriggeredSwipe = false
+                    }
+            )
+    }
+}
+
+// MARK: - VideoControlsView Extension
+extension VideoControlsView {
+
+    private func formatSpeed(_ speed: Float) -> String {
+        if speed == 1.0 {
+            return "1"
+        } else if speed == floor(speed) {
+            return String(format: "%.0f", speed)
+        } else {
+            // Eine Dezimalstelle für saubere Anzeige (0.8, 0.7, etc.)
+            let formatted = String(format: "%.1f", speed)
+            // Entferne .0 für ganze Zahlen
+            return formatted.hasSuffix(".0") ? String(formatted.dropLast(2)) : formatted
+        }
+    }
+
+    private func changeSpeedOneStep(currentSpeed: Float, direction: Int) -> Float {
+        let speeds = allSpeeds
+
+        if direction == 1 {
+            // Nach oben = schneller (step-by-step durch alle Geschwindigkeiten)
+            if let currentIndex = speeds.firstIndex(of: currentSpeed) {
+                let nextIndex = min(currentIndex + 1, speeds.count - 1)
+                if nextIndex != currentIndex {
+                    return speeds[nextIndex]
+                }
+            } else {
+                // Nicht in speeds, finde nächste höhere Speed
+                return speeds.first(where: { $0 > currentSpeed }) ?? speeds.last ?? 1.0
+            }
+        } else {
+            // Nach unten = langsamer (step-by-step durch alle Geschwindigkeiten)
+            if let currentIndex = speeds.firstIndex(of: currentSpeed) {
+                let nextIndex = max(currentIndex - 1, 0)
+                if nextIndex != currentIndex {
+                    return speeds[nextIndex]
+                }
+            } else {
+                // Nicht in speeds, finde nächste niedrigere Speed
+                return speeds.reversed().first(where: { $0 < currentSpeed }) ?? speeds.first ?? 1.0
+            }
+        }
+
+        return currentSpeed
+    }
+
     private func togglePlayPause() {
         if isPlaying {
             player.pause()

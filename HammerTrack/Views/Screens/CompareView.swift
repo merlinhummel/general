@@ -2,6 +2,7 @@ import SwiftUI
 import PhotosUI
 import AVKit
 import UniformTypeIdentifiers
+import Combine
 
 struct CompareView: View {
     @State private var showingVideoPicker = false
@@ -29,6 +30,17 @@ struct CompareView: View {
     @State private var totalEllipses2: Int = 0
     @State private var selectedEllipseIndex: Int? = nil  // Shared for both videos in sync mode
     @State private var ellipseViewMode: Bool = false  // Ellipse navigation mode active?
+    @State private var isLoadingVideos = false  // Video-Lade-Animation
+    @State private var rotationAngle: Double = 0  // Zahnrad-Rotation
+
+    // Playback Speed für beide Videos
+    @State private var playbackSpeed1: Float = 1.0
+    @State private var playbackSpeed2: Float = 1.0
+    @State private var hasTriggeredSwipe1 = false
+    @State private var hasTriggeredSwipe2 = false
+
+    // Combine cancellables for player status observation
+    @State private var cancellables = Set<AnyCancellable>()
 
     @Environment(\.presentationMode) var presentationMode
     
@@ -51,17 +63,33 @@ struct CompareView: View {
                             )
                             .background(Color.black)
 
-                            // Processing overlay with Liquid Glass
+                            // Processing overlay zentriert
                             if hammerTracker1.isProcessing {
-                                VStack(spacing: 8) {
-                                    ProgressView()
-                                        .tint(.white)
-                                    Text("Processing: \(Int(hammerTracker1.progress * 100))%")
-                                        .font(.caption)
-                                        .foregroundColor(.white)
+                                VStack {
+                                    Spacer()
+
+                                    VStack(spacing: 12) {
+                                        ProgressView()
+                                            .scaleEffect(1.2)
+                                            .tint(.white)
+
+                                        Text("Analysiere Video...")
+                                            .font(.subheadline)
+                                            .foregroundColor(.white)
+
+                                        ProgressView(value: hammerTracker1.progress)
+                                            .frame(width: 150)
+                                            .tint(LiquidGlassColors.accent)
+
+                                        Text("\(Int(hammerTracker1.progress * 100))%")
+                                            .font(.caption2)
+                                            .foregroundColor(.white)
+                                    }
+                                    .padding(20)
+                                    .floatingGlassCard(cornerRadius: 16)
+
+                                    Spacer()
                                 }
-                                .padding(12)
-                                .floatingGlassCard(cornerRadius: 12)
                             }
                         }
                         .frame(maxHeight: .infinity)
@@ -81,17 +109,33 @@ struct CompareView: View {
                             )
                             .background(Color.black)
 
-                            // Processing overlay with Liquid Glass
+                            // Processing overlay zentriert
                             if hammerTracker2.isProcessing {
-                                VStack(spacing: 8) {
-                                    ProgressView()
-                                        .tint(.white)
-                                    Text("Processing: \(Int(hammerTracker2.progress * 100))%")
-                                        .font(.caption)
-                                        .foregroundColor(.white)
+                                VStack {
+                                    Spacer()
+
+                                    VStack(spacing: 12) {
+                                        ProgressView()
+                                            .scaleEffect(1.2)
+                                            .tint(.white)
+
+                                        Text("Analysiere Video...")
+                                            .font(.subheadline)
+                                            .foregroundColor(.white)
+
+                                        ProgressView(value: hammerTracker2.progress)
+                                            .frame(width: 150)
+                                            .tint(LiquidGlassColors.accent)
+
+                                        Text("\(Int(hammerTracker2.progress * 100))%")
+                                            .font(.caption2)
+                                            .foregroundColor(.white)
+                                    }
+                                    .padding(20)
+                                    .floatingGlassCard(cornerRadius: 16)
+
+                                    Spacer()
                                 }
-                                .padding(12)
-                                .floatingGlassCard(cornerRadius: 12)
                             }
                         }
                         .frame(maxHeight: .infinity)
@@ -104,22 +148,45 @@ struct CompareView: View {
                     LiquidGlassBackground()
 
                     VStack(spacing: 20) {
-                        Image(systemName: "rectangle.stack")
-                            .font(.system(size: 60))
-                            .foregroundColor(.white.opacity(0.8))
+                        // Rotierendes Zahnrad beim Laden, sonst normales Icon
+                        ZStack {
+                            if isLoadingVideos {
+                                Image(systemName: "gearshape.fill")
+                                    .font(.system(size: 60))
+                                    .foregroundColor(.white.opacity(0.8))
+                                    .rotationEffect(.degrees(rotationAngle))
+                                    .onAppear {
+                                        // Starte endlose Rotation
+                                        withAnimation(Animation.linear(duration: 2).repeatForever(autoreverses: false)) {
+                                            rotationAngle = 360
+                                        }
+                                    }
+                            } else {
+                                Image(systemName: "rectangle.stack")
+                                    .font(.system(size: 60))
+                                    .foregroundColor(.white.opacity(0.8))
+                            }
+                        }
 
-                        Text("Wählen Sie zwei Videos zum Vergleichen")
+                        Text(isLoadingVideos ? "Videos werden geladen..." : "Wählen Sie zwei Videos zum Vergleichen")
                             .font(.headline)
                             .foregroundColor(.white)
 
-                        Button(action: {
-                            showingVideoPicker = true
-                        }) {
-                            Text("Videos auswählen")
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 30)
-                                .padding(.vertical, 15)
-                                .interactiveLiquidGlass(cornerRadius: 15)
+                        if !isLoadingVideos {
+                            Button(action: {
+                                showingVideoPicker = true
+                            }) {
+                                Text("Videos auswählen")
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 30)
+                                    .padding(.vertical, 15)
+                                    .interactiveLiquidGlass(cornerRadius: 15)
+                            }
+                        }
+                    }
+                    .onChange(of: isLoadingVideos) { _, loading in
+                        if loading {
+                            rotationAngle = 0  // Reset rotation
                         }
                     }
                 }
@@ -128,9 +195,9 @@ struct CompareView: View {
 
             // Overlay: Floating UI Elements
             VStack(spacing: 0) {
-                // Floating Header Buttons (always on top)
+                // Floating Header Buttons (always on top) - gleiche Abstände wie Single View
                 HStack {
-                    // Back button
+                    // Back button - gleiche Breite wie Zeitmodi für perfekte Titel-Zentrierung
                     Button(action: {
                         if player1 != nil || player2 != nil {
                             // Reset players and go back to selection
@@ -151,12 +218,13 @@ struct CompareView: View {
                         .foregroundColor(.white)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
-                        .liquidGlassEffect(style: .thin, cornerRadius: 12)
+                        .frame(width: 100)
                     }
+                    .interactiveLiquidGlass(cornerRadius: 12)
 
                     Spacer()
 
-                    // Title
+                    // Title - Liquid Glass Style (in der Mitte)
                     Text("Compare View")
                         .font(.system(size: 16, weight: .medium))
                         .foregroundColor(.white)
@@ -166,284 +234,182 @@ struct CompareView: View {
 
                     Spacer()
 
-                    // Placeholder for balance
-                    Color.clear
-                        .frame(width: 80, height: 20)
+                    // Zeitmodi Button - EXAKT wie Zurück Button, nur auf rechter Seite
+                    DualSpeedControl(
+                        speed1: $playbackSpeed1,
+                        speed2: $playbackSpeed2,
+                        hasTriggeredSwipe1: $hasTriggeredSwipe1,
+                        hasTriggeredSwipe2: $hasTriggeredSwipe2,
+                        isPlaying: isPlaying,
+                        player1: player1,
+                        player2: player2
+                    )
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 20)  // Gleicher Abstand zum Bildschirmrand wie Single View (20px)
                 .padding(.vertical, 12)
                 .padding(.top, 0)
 
                 Spacer()
 
-                // Timeline 1 in der Mitte (am unteren Ende von Video 1)
+                // Video Player 1 Timeline - Liquid Glass Style
                 if selectedVideoURLs.count == 2 {
                     VStack(spacing: 4) {
-                        // Ellipsen-Info für Video 1 (nur bei Sync & Ellipsen-Modus)
-                        if isSynchronized && ellipseViewMode,
-                           let selectedIndex = selectedEllipseIndex,
-                           let analysis1 = hammerTracker1.analysisResult,
-                           selectedIndex < analysis1.ellipses.count {
-                            let ellipse1 = analysis1.ellipses[selectedIndex]
-                            HStack(spacing: 6) {
-                                Text("Ellipse \(selectedIndex + 1)/\(totalEllipses1)")
-                                    .font(.caption2)
-                                    .foregroundColor(.white.opacity(0.8))
-                                Text("•")
-                                    .foregroundColor(.white.opacity(0.5))
-                                Text(String(format: "%.1f°", abs(ellipse1.angle)))
-                                    .font(.caption2)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(.white)
-                                Text(ellipse1.angle > 0 ? "rechts" : "links")
-                                    .font(.caption2)
-                                    .foregroundColor(ellipse1.angle > 0 ? LiquidGlassColors.accent : LiquidGlassColors.primary)
-                            }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .liquidGlassEffect(style: .thin, cornerRadius: 8)
-                        }
+                        // Timeline - dünner Slider
+                        Slider(
+                            value: Binding(
+                                get: { currentTime1 },
+                                set: { newValue in
+                                    currentTime1 = newValue
+                                    let cmTime = CMTime(seconds: newValue, preferredTimescale: 1000)
+                                    player1?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero)
 
-                        VStack(spacing: 2) {
-                            Slider(
-                                value: Binding(
-                                    get: { currentTime1 },
-                                    set: { newValue in
-                                        currentTime1 = newValue
-                                        if let player = player1 {
-                                            let cmTime = CMTime(seconds: newValue, preferredTimescale: 1000)
-                                            player.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero)
-
-                                            // When synchronized, maintain the time offset
-                                            if isSynchronized, let syncPlayer = player2 {
-                                                let syncTime = newValue + timeOffset
-                                                let clampedSyncTime = max(0, min(syncTime, duration2))
-                                                syncPlayer.seek(to: CMTime(seconds: clampedSyncTime, preferredTimescale: 1000), toleranceBefore: .zero, toleranceAfter: .zero)
-                                                currentTime2 = clampedSyncTime
-                                            }
-                                        }
+                                    // When synchronized, maintain the time offset
+                                    if isSynchronized {
+                                        let syncTime = newValue + timeOffset
+                                        let clampedSyncTime = max(0, min(syncTime, duration2))
+                                        player2?.seek(to: CMTime(seconds: clampedSyncTime, preferredTimescale: 1000), toleranceBefore: .zero, toleranceAfter: .zero)
+                                        currentTime2 = clampedSyncTime
                                     }
-                                ),
-                                in: 0...max(duration1, 1)
-                            )
-                            .tint(LiquidGlassColors.accent)
-                            .frame(height: 8)
+                                }
+                            ),
+                            in: 0...max(duration1, 1)
+                        )
+                        .tint(LiquidGlassColors.accent)
+                        .frame(height: 8)
 
-                            HStack {
-                                Text(formatTime(currentTime1))
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundColor(.white.opacity(0.7))
-                                Spacer()
-                                Text(formatTime(duration1))
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundColor(.white.opacity(0.7))
-                            }
+                        // Time labels - jede Hälfte zentriert
+                        HStack(spacing: 0) {
+                            // Linke Hälfte: currentTime zentriert
+                            Text(formatTime(currentTime1))
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundColor(.white.opacity(0.8))
+                                .frame(maxWidth: .infinity, alignment: .center)
+
+                            // Rechte Hälfte: duration zentriert
+                            Text(formatTime(duration1))
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundColor(.white.opacity(0.8))
+                                .frame(maxWidth: .infinity, alignment: .center)
                         }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .liquidGlassEffect(style: .thin, cornerRadius: 12)
                     }
-                    .padding(.horizontal, 8)
+                    .padding(.vertical, 10)
+                    .padding(.horizontal, 16)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Color.white.opacity(0.10))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(
+                                        LinearGradient(
+                                            colors: [
+                                                Color.white.opacity(0.25),
+                                                Color.white.opacity(0.08)
+                                            ],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        ),
+                                        lineWidth: 1
+                                    )
+                            )
+                            .shadow(color: Color.white.opacity(0.08), radius: 6, x: 0, y: 3)
+                    )
+                    .frame(maxWidth: 500)
+                    .padding(.horizontal, 20)
+                    .offset(y: -15)
                 }
 
                 Spacer()
 
-                // Timeline 2 + Master Controls zusammen unten (direkt am unteren Rand)
-                if selectedVideoURLs.count == 2 {
-                    VStack(spacing: 8) {
-                        // Ellipsen-Info für Video 2 + Timeline 2
-                        VStack(spacing: 4) {
-                            // Ellipsen-Info für Video 2 (nur bei Sync & Ellipsen-Modus)
-                            if isSynchronized && ellipseViewMode,
-                               let selectedIndex = selectedEllipseIndex,
-                               let analysis2 = hammerTracker2.analysisResult,
-                               selectedIndex < analysis2.ellipses.count {
-                                let ellipse2 = analysis2.ellipses[selectedIndex]
-                                HStack(spacing: 6) {
-                                    Text("Ellipse \(selectedIndex + 1)/\(totalEllipses2)")
-                                        .font(.caption2)
-                                        .foregroundColor(.white.opacity(0.8))
-                                    Text("•")
-                                        .foregroundColor(.white.opacity(0.5))
-                                    Text(String(format: "%.1f°", abs(ellipse2.angle)))
-                                        .font(.caption2)
-                                        .fontWeight(.medium)
-                                        .foregroundColor(.white)
-                                    Text(ellipse2.angle > 0 ? "rechts" : "links")
-                                        .font(.caption2)
-                                        .foregroundColor(ellipse2.angle > 0 ? LiquidGlassColors.accent : LiquidGlassColors.primary)
-                                }
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .liquidGlassEffect(style: .thin, cornerRadius: 8)
-                            }
-
-                            // Thin Timeline for Player 2
-                            VStack(spacing: 2) {
-                                Slider(
-                                    value: Binding(
-                                        get: { currentTime2 },
-                                        set: { newValue in
-                                            currentTime2 = newValue
-                                            if let player = player2 {
-                                                let cmTime = CMTime(seconds: newValue, preferredTimescale: 1000)
-                                                player.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero)
-
-                                                // When synchronized, maintain the time offset
-                                                if isSynchronized, let syncPlayer = player1 {
-                                                    let syncTime = newValue - timeOffset
-                                                    let clampedSyncTime = max(0, min(syncTime, duration1))
-                                                    syncPlayer.seek(to: CMTime(seconds: clampedSyncTime, preferredTimescale: 1000), toleranceBefore: .zero, toleranceAfter: .zero)
-                                                    currentTime1 = clampedSyncTime
-                                                }
-                                            }
-                                        }
-                                    ),
-                                    in: 0...max(duration2, 1)
-                                )
-                                .tint(LiquidGlassColors.accent)
-                                .frame(height: 8)
-
-                                HStack {
-                                    Text(formatTime(currentTime2))
-                                        .font(.system(size: 10, design: .monospaced))
-                                        .foregroundColor(.white.opacity(0.7))
-                                    Spacer()
-                                    Text(formatTime(duration2))
-                                        .font(.system(size: 10, design: .monospaced))
-                                        .foregroundColor(.white.opacity(0.7))
-                                }
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .liquidGlassEffect(style: .thin, cornerRadius: 12)
-                        }
-
-                        // Master Controls (erweitert bei Sync-Modus)
-                        HStack(spacing: isSynchronized ? 12 : 15) {
-                            // Sync button
-                            Button(action: {
-                                isSynchronized.toggle()
-                                if isSynchronized {
-                                    // When enabling sync, calculate and store the current time offset
-                                    // Offset = currentTime2 - currentTime1
-                                    // This offset will be maintained during synchronized playback
-                                    timeOffset = currentTime2 - currentTime1
-                                    print("Synchronization enabled. Time offset: \(timeOffset)s (Video1: \(currentTime1)s, Video2: \(currentTime2)s)")
-                                } else {
-                                    print("Synchronization disabled")
-                                    ellipseViewMode = false
-                                    selectedEllipseIndex = nil
-                                }
-                            }) {
-                                Image(systemName: isSynchronized ? "link" : "link.badge.plus")
-                                    .font(.system(size: 16))
-                                    .foregroundColor(isSynchronized ? LiquidGlassColors.accent : .white.opacity(0.7))
-                                    .frame(width: 36, height: 36)
-                            }
-
-                            // Ellipse backward (nur bei Sync sichtbar)
+                // Video Player 2 Controls (am unteren Ende von Video 2)
+                if selectedVideoURLs.count == 2, let player1 = player1, let player2 = player2 {
+                    CompareVideoControls(
+                        player: player2,
+                        isPlaying: $isPlaying,
+                        currentTime: $currentTime2,
+                        duration: $duration2,
+                        showTrajectory: $showTrajectory,
+                        currentEllipseIndex: currentEllipseIndex2,
+                        totalEllipses: totalEllipses2,
+                        selectedEllipseIndex: $selectedEllipseIndex,
+                        ellipseViewMode: $ellipseViewMode,
+                        analysisResult: hammerTracker2.analysisResult,
+                        isSynchronized: isSynchronized,
+                        isPlayer2: true,
+                        otherPlayer: player1,
+                        otherCurrentTime: $currentTime1,
+                        otherDuration: duration1,
+                        timeOffset: $timeOffset,
+                        onSyncToggle: {
+                            isSynchronized.toggle()
                             if isSynchronized {
-                                Button(action: {
-                                    previousEllipse()
-                                }) {
-                                    Image(systemName: "chevron.left.2")
-                                        .font(.system(size: 16))
-                                        .foregroundColor(canGoPreviousEllipse() ? .white : .white.opacity(0.3))
-                                        .frame(width: 36, height: 36)
-                                }
-                                .disabled(!canGoPreviousEllipse())
+                                timeOffset = currentTime2 - currentTime1
+                                print("Synchronization enabled. Time offset: \(timeOffset)s")
+                            } else {
+                                print("Synchronization disabled")
+                                ellipseViewMode = false
+                                selectedEllipseIndex = nil
                             }
-
-                            // Frame backward
-                            Button(action: {
-                                stepFrameBoth(forward: false)
-                            }) {
-                                Image(systemName: "backward.frame")
-                                    .font(.system(size: 16))
-                                    .foregroundColor(.white)
-                                    .frame(width: 36, height: 36)
-                            }
-
-                            // Play/Pause
-                            Button(action: {
-                                if isPlaying {
-                                    player1?.pause()
-                                    player2?.pause()
-                                } else {
-                                    player1?.play()
-                                    player2?.play()
-                                }
-                                isPlaying.toggle()
-                            }) {
-                                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                                    .font(.system(size: 18))
-                                    .foregroundColor(.white)
-                                    .frame(width: 44, height: 44)
-                                    .background(
-                                        Circle()
-                                            .fill(LiquidGlassColors.primary)
-                                    )
-                                    .overlay(
-                                        Circle()
-                                            .stroke(LiquidGlassColors.glassBorder, lineWidth: 1.5)
-                                    )
-                            }
-
-                            // Frame forward
-                            Button(action: {
-                                stepFrameBoth(forward: true)
-                            }) {
-                                Image(systemName: "forward.frame")
-                                    .font(.system(size: 16))
-                                    .foregroundColor(.white)
-                                    .frame(width: 36, height: 36)
-                            }
-
-                            // Ellipse forward (nur bei Sync sichtbar)
-                            if isSynchronized {
-                                Button(action: {
-                                    nextEllipse()
-                                }) {
-                                    Image(systemName: "chevron.right.2")
-                                        .font(.system(size: 16))
-                                        .foregroundColor(canGoNextEllipse() ? .white : .white.opacity(0.3))
-                                        .frame(width: 36, height: 36)
-                                }
-                                .disabled(!canGoNextEllipse())
-                            }
-
-                            // Trajectory toggle
-                            Button(action: {
-                                showTrajectory.toggle()
-                            }) {
-                                Image(systemName: showTrajectory ? "eye" : "eye.slash")
-                                    .font(.system(size: 16))
-                                    .foregroundColor(showTrajectory ? LiquidGlassColors.accent : .white.opacity(0.7))
-                                    .frame(width: 36, height: 36)
-                            }
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 8)
-                        .liquidGlassEffect(style: .thin, cornerRadius: 16)
-                        .animation(.spring(response: 0.3), value: isSynchronized)
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 18)  // Gleicher Abstand wie Timeline 1 seitlich (10 + 8 = 18)
+                        },
+                        onEllipseChange: { seekToEllipse(index: $0) },
+                        onFrameStep: { forward in stepFrameBoth(forward: forward) },
+                        onPreviousEllipse: previousEllipse,
+                        onNextEllipse: nextEllipse,
+                        canGoPreviousEllipse: canGoPreviousEllipse,
+                        canGoNextEllipse: canGoNextEllipse
+                    )
+                    .frame(maxWidth: 500)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 20)
                 }
             }
             .frame(maxHeight: .infinity, alignment: .top)  // VStack nimmt volle Höhe ein, Elemente oben ausgerichtet
             .ignoresSafeArea(edges: .bottom)  // Ignoriere Safe Area unten, damit 18px wirklich zum physischen Bildschirmrand sind
         }
         .navigationBarHidden(true)
-        .sheet(isPresented: $showingVideoPicker) {
-            MultipleVideoPicker(selectedVideoURLs: $selectedVideoURLs)
+        .sheet(isPresented: $showingVideoPicker, onDismiss: {
+            // Wenn Picker geschlossen wird, starte Loading-Animation
+            // (bevor Videos fertig kopiert sind)
+            if !selectedVideoURLs.isEmpty || showingVideoPicker == false {
+                isLoadingVideos = true
+            }
+        }) {
+            MultipleVideoPicker(selectedVideoURLs: $selectedVideoURLs, isLoadingVideos: $isLoadingVideos)
         }
         .onChange(of: selectedVideoURLs) { _, urls in
             if urls.count == 2 {
                 setupPlayers(with: urls)
                 processVideos(urls: urls)
             }
+        }
+        .onChange(of: isPlaying) { _, playing in
+            if playing {
+                // Apply playback speeds when starting
+                player1?.rate = playbackSpeed1
+                player2?.rate = playbackSpeed2
+                player1?.play()
+                player2?.play()
+            } else {
+                player1?.pause()
+                player2?.pause()
+            }
+        }
+        .onChange(of: playbackSpeed1) { _, newSpeed in
+            // Update player 1 rate if playing
+            if isPlaying {
+                player1?.rate = newSpeed
+            }
+        }
+        .onChange(of: playbackSpeed2) { _, newSpeed in
+            // Update player 2 rate if playing
+            if isPlaying {
+                player2?.rate = newSpeed
+            }
+        }
+        .onDisappear {
+            // Reset playback speeds when leaving the view
+            playbackSpeed1 = 1.0
+            playbackSpeed2 = 1.0
+            print("🔄 Compare View dismissed - playback speeds reset to 1.0x")
         }
     }
 
@@ -623,8 +589,6 @@ struct CompareView: View {
     }
 
     private func canGoPreviousEllipse() -> Bool {
-        guard isSynchronized else { return false }
-
         let maxEllipses = max(totalEllipses1, totalEllipses2)
         guard maxEllipses > 0 else { return false }
 
@@ -636,8 +600,6 @@ struct CompareView: View {
     }
 
     private func canGoNextEllipse() -> Bool {
-        guard isSynchronized else { return false }
-
         let maxEllipses = max(totalEllipses1, totalEllipses2)
         guard maxEllipses > 0 else { return false }
 
@@ -670,38 +632,126 @@ struct CompareView: View {
 
     private func setupPlayers(with urls: [URL]) {
         guard urls.count == 2 else { return }
-        
-        player1 = AVPlayer(url: urls[0])
-        player2 = AVPlayer(url: urls[1])
-        
-        // Load durations and sizes
-        Task {
-            let asset1 = AVURLAsset(url: urls[0])
-            let asset2 = AVURLAsset(url: urls[1])
-            
-            do {
-                let duration1 = try await asset1.load(.duration)
-                self.duration1 = duration1.seconds
-                
-                let duration2 = try await asset2.load(.duration)
-                self.duration2 = duration2.seconds
-                
-                if let track1 = asset1.tracks(withMediaType: .video).first {
-                    let size = try await track1.load(.naturalSize)
-                    let transform = try await track1.load(.preferredTransform)
-                    self.videoSize1 = size.applying(transform)
-                }
-                
-                if let track2 = asset2.tracks(withMediaType: .video).first {
-                    let size = try await track2.load(.naturalSize)
-                    let transform = try await track2.load(.preferredTransform)
-                    self.videoSize2 = size.applying(transform)
-                }
-            } catch {
-                print("Error loading durations: \(error)")
+
+        print("🎬 Setting up players:")
+        print("   Video 1: \(urls[0].lastPathComponent)")
+        print("   Video 2: \(urls[1].lastPathComponent)")
+
+        // Create player items with status observation
+        let asset1 = AVURLAsset(url: urls[0])
+        let playerItem1 = AVPlayerItem(asset: asset1)
+
+        let asset2 = AVURLAsset(url: urls[1])
+        let playerItem2 = AVPlayerItem(asset: asset2)
+
+        // Observe player 1 status
+        NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: playerItem1,
+            queue: .main
+        ) { notification in
+            if let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error {
+                print("❌ Video 1 failed to play: \(error.localizedDescription)")
             }
         }
-        
+
+        playerItem1.publisher(for: \.status)
+            .sink { status in
+                switch status {
+                case .readyToPlay:
+                    print("✅ Player 1 ready: \(urls[0].lastPathComponent)")
+                case .failed:
+                    print("❌ Player 1 failed: \(playerItem1.error?.localizedDescription ?? "Unknown error")")
+                case .unknown:
+                    print("⚠️ Player 1 status unknown")
+                @unknown default:
+                    print("⚠️ Player 1 status: \(status)")
+                }
+            }
+            .store(in: &cancellables)
+
+        // Observe player 2 status
+        NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: playerItem2,
+            queue: .main
+        ) { notification in
+            if let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error {
+                print("❌ Video 2 failed to play: \(error.localizedDescription)")
+            }
+        }
+
+        playerItem2.publisher(for: \.status)
+            .sink { status in
+                switch status {
+                case .readyToPlay:
+                    print("✅ Player 2 ready: \(urls[1].lastPathComponent)")
+                case .failed:
+                    print("❌ Player 2 failed: \(playerItem2.error?.localizedDescription ?? "Unknown error")")
+                case .unknown:
+                    print("⚠️ Player 2 status unknown")
+                @unknown default:
+                    print("⚠️ Player 2 status: \(status)")
+                }
+            }
+            .store(in: &cancellables)
+
+        player1 = AVPlayer(playerItem: playerItem1)
+        player2 = AVPlayer(playerItem: playerItem2)
+
+        // ⚡️ OPTIMIERUNG: Parallel Asset-Loading (2x schneller)
+        Task {
+            do {
+                // Load both assets in parallel using async let
+                async let duration1Task = asset1.load(.duration)
+                async let duration2Task = asset2.load(.duration)
+
+                let (duration1, duration2) = try await (duration1Task, duration2Task)
+                self.duration1 = duration1.seconds
+                self.duration2 = duration2.seconds
+                print("⏱️ Video 1 duration: \(duration1.seconds)s")
+                print("⏱️ Video 2 duration: \(duration2.seconds)s")
+
+                // Load video tracks in parallel
+                async let track1Task = asset1.tracks(withMediaType: .video).first
+                async let track2Task = asset2.tracks(withMediaType: .video).first
+
+                let (track1, track2) = await (track1Task, track2Task)
+
+                // Load track properties in parallel
+                if let track1 = track1 {
+                    async let sizeTask = track1.load(.naturalSize)
+                    async let transformTask = track1.load(.preferredTransform)
+                    let (size, transform) = try await (sizeTask, transformTask)
+                    self.videoSize1 = size.applying(transform)
+                    print("📐 Video 1 size: \(self.videoSize1)")
+                } else {
+                    print("⚠️ Video 1: No video track found!")
+                }
+
+                if let track2 = track2 {
+                    async let sizeTask = track2.load(.naturalSize)
+                    async let transformTask = track2.load(.preferredTransform)
+                    let (size, transform) = try await (sizeTask, transformTask)
+                    self.videoSize2 = size.applying(transform)
+                    print("📐 Video 2 size: \(self.videoSize2)")
+                } else {
+                    print("⚠️ Video 2: No video track found!")
+                }
+
+                // Loading fertig - Animation ausblenden
+                await MainActor.run {
+                    self.isLoadingVideos = false
+                }
+                print("✅ Both videos loaded successfully")
+            } catch {
+                print("❌ Error loading durations: \(error)")
+                await MainActor.run {
+                    self.isLoadingVideos = false
+                }
+            }
+        }
+
         // Add time observers with millisecond precision
         addTimeObservers()
     }
@@ -722,26 +772,30 @@ struct CompareView: View {
     
     private func processVideos(urls: [URL]) {
         guard urls.count == 2 else { return }
-        
-        // Process video 1
-        hammerTracker1.processVideo(url: urls[0]) { result in
-            switch result {
-            case .success(let trajectory):
-                print("Video 1 processing complete. Detected \(trajectory.frames.count) frames")
-                _ = hammerTracker1.analyzeTrajectory()
-            case .failure(let error):
-                print("Error processing video 1: \(error)")
+
+        // ⚡️ OPTIMIERUNG: Parallel Video Processing (2x schneller)
+        // Process both videos simultaneously
+        DispatchQueue.global(qos: .userInitiated).async {
+            self.hammerTracker1.processVideo(url: urls[0]) { result in
+                switch result {
+                case .success(let trajectory):
+                    print("Video 1 processing complete. Detected \(trajectory.frames.count) frames")
+                    _ = self.hammerTracker1.analyzeTrajectory()
+                case .failure(let error):
+                    print("Error processing video 1: \(error)")
+                }
             }
         }
-        
-        // Process video 2
-        hammerTracker2.processVideo(url: urls[1]) { result in
-            switch result {
-            case .success(let trajectory):
-                print("Video 2 processing complete. Detected \(trajectory.frames.count) frames")
-                _ = hammerTracker2.analyzeTrajectory()
-            case .failure(let error):
-                print("Error processing video 2: \(error)")
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            self.hammerTracker2.processVideo(url: urls[1]) { result in
+                switch result {
+                case .success(let trajectory):
+                    print("Video 2 processing complete. Detected \(trajectory.frames.count) frames")
+                    _ = self.hammerTracker2.analyzeTrajectory()
+                case .failure(let error):
+                    print("Error processing video 2: \(error)")
+                }
             }
         }
     }
@@ -749,6 +803,7 @@ struct CompareView: View {
 
 struct MultipleVideoPicker: UIViewControllerRepresentable {
     @Binding var selectedVideoURLs: [URL]
+    @Binding var isLoadingVideos: Bool
     @Environment(\.presentationMode) var presentationMode
     
     func makeUIViewController(context: Context) -> PHPickerViewController {
@@ -775,30 +830,478 @@ struct MultipleVideoPicker: UIViewControllerRepresentable {
         }
         
         func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            // Wenn Videos ausgewählt wurden, aktiviere Loading sofort
+            if !results.isEmpty {
+                parent.isLoadingVideos = true
+            }
+
             parent.presentationMode.wrappedValue.dismiss()
-            
+
+            // ⚡️ OPTIMIERUNG: loadFileRepresentation läuft bereits parallel für jedes Video
+            let urlsQueue = DispatchQueue(label: "com.hammertrack.urls")
             var urls: [URL] = []
             let group = DispatchGroup()
-            
+
             for result in results {
                 let provider = result.itemProvider
-                
+
                 if provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
                     group.enter()
+                    // Wichtig: Kopieren muss INNERHALB des loadFileRepresentation-Closures passieren,
+                    // da die URL nur temporär ist und danach gelöscht wird
                     provider.loadFileRepresentation(forTypeIdentifier: UTType.movie.identifier) { url, error in
                         if let url = url {
                             let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
-                            try? FileManager.default.copyItem(at: url, to: tempURL)
-                            urls.append(tempURL)
+                            do {
+                                // Falls Datei existiert, erst löschen
+                                try? FileManager.default.removeItem(at: tempURL)
+                                // Kopieren im selben Thread - die URL ist nur hier gültig!
+                                try FileManager.default.copyItem(at: url, to: tempURL)
+
+                                // Thread-safe URL hinzufügen (synchron, damit URLs verfügbar sind vor group.notify)
+                                urlsQueue.sync {
+                                    urls.append(tempURL)
+                                }
+                            } catch {
+                                print("❌ Error copying video file: \(error)")
+                            }
                         }
                         group.leave()
                     }
                 }
             }
-            
+
             group.notify(queue: .main) {
+                print("✅ Videos loaded: \(urls.count) files")
+                if urls.isEmpty {
+                    // Keine Videos ausgewählt → Loading stoppen
+                    self.parent.isLoadingVideos = false
+                }
                 self.parent.selectedVideoURLs = urls
             }
         }
+    }
+}
+
+// MARK: - Compare Video Controls View
+struct CompareVideoControls: View {
+    let player: AVPlayer
+    @Binding var isPlaying: Bool
+    @Binding var currentTime: Double
+    @Binding var duration: Double
+    @Binding var showTrajectory: Bool
+    let currentEllipseIndex: Int?
+    let totalEllipses: Int
+    @Binding var selectedEllipseIndex: Int?
+    @Binding var ellipseViewMode: Bool
+    let analysisResult: TrajectoryAnalysis?
+
+    // Compare-specific properties
+    let isSynchronized: Bool
+    let isPlayer2: Bool  // Player 2 hat den Sync-Button
+    let otherPlayer: AVPlayer?
+    @Binding var otherCurrentTime: Double
+    let otherDuration: Double
+    @Binding var timeOffset: Double
+
+    // Callbacks
+    let onSyncToggle: () -> Void
+    let onEllipseChange: (Int) -> Void
+    let onFrameStep: (Bool) -> Void
+    let onPreviousEllipse: () -> Void
+    let onNextEllipse: () -> Void
+    let canGoPreviousEllipse: () -> Bool
+    let canGoNextEllipse: () -> Bool
+
+    @State private var isDraggingSlider = false
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            // Main player controls
+            VStack(spacing: 6) {
+                // Timeline - dünner
+                Slider(
+                    value: Binding(
+                        get: { currentTime },
+                        set: { newValue in
+                            currentTime = newValue
+                            if isDraggingSlider {
+                                seekWithSync(to: newValue)
+                            }
+                        }
+                    ),
+                    in: 0...max(duration, 1)
+                ) { editing in
+                    isDraggingSlider = editing
+                    if !editing {
+                        seekWithSync(to: currentTime)
+                    }
+                }
+                .tint(LiquidGlassColors.accent)
+                .frame(height: 16)
+
+                // Time labels
+                HStack {
+                    Text(formatTime(currentTime))
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.8))
+
+                    Spacer()
+
+                    Text(formatTime(duration))
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.8))
+                }
+
+                // Fixed control buttons on one line - immer vollständig sichtbar
+                HStack(spacing: 15) {
+                    // Sync button (nur bei Player 2)
+                    if isPlayer2 {
+                        Button(action: onSyncToggle) {
+                            Image(systemName: isSynchronized ? "link" : "link.badge.plus")
+                                .font(.system(size: 16))
+                                .foregroundColor(isSynchronized ? LiquidGlassColors.accent : .white.opacity(0.7))
+                                .frame(width: 36, height: 36)
+                        }
+                    }
+
+                    // Ellipse backward - immer sichtbar
+                    Button(action: onPreviousEllipse) {
+                        Image(systemName: "chevron.left.2")
+                            .font(.title3)
+                            .foregroundColor(canGoPreviousEllipse() ? .white : .white.opacity(0.3))
+                            .frame(width: 38, height: 50)
+                    }
+                    .disabled(!canGoPreviousEllipse())
+
+                    // Frame backward
+                    Button(action: {
+                        onFrameStep(false)
+                    }) {
+                        Image(systemName: "backward.frame")
+                            .font(.title3)
+                            .foregroundColor(.white)
+                            .frame(width: 44, height: 50)
+                    }
+
+                    // Play/Pause button
+                    Button(action: {
+                        isPlaying.toggle()
+                    }) {
+                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                            .font(.title2)
+                            .foregroundColor(.white)
+                            .frame(width: 50, height: 50)
+                            .background(
+                                Circle()
+                                    .fill(LiquidGlassColors.primary)
+                            )
+                            .overlay(
+                                Circle()
+                                    .stroke(LiquidGlassColors.glassBorder, lineWidth: 1.5)
+                            )
+                            .shadow(color: LiquidGlassColors.primary.opacity(0.3), radius: 8, x: 0, y: 4)
+                    }
+
+                    // Frame forward
+                    Button(action: {
+                        onFrameStep(true)
+                    }) {
+                        Image(systemName: "forward.frame")
+                            .font(.title3)
+                            .foregroundColor(.white)
+                            .frame(width: 44, height: 50)
+                    }
+
+                    // Ellipse forward - immer sichtbar
+                    Button(action: onNextEllipse) {
+                        Image(systemName: "chevron.right.2")
+                            .font(.title3)
+                            .foregroundColor(canGoNextEllipse() ? .white : .white.opacity(0.3))
+                            .frame(width: 38, height: 50)
+                    }
+                    .disabled(!canGoNextEllipse())
+
+                    // Trajectory toggle (ganz rechts)
+                    Button(action: {
+                        showTrajectory.toggle()
+                    }) {
+                        Image(systemName: showTrajectory ? "eye" : "eye.slash")
+                            .font(.system(size: 16))
+                            .foregroundColor(showTrajectory ? LiquidGlassColors.accent : .white.opacity(0.7))
+                            .frame(width: 36, height: 36)
+                    }
+                }
+                .frame(height: 50)
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 16)
+            .background(
+                RoundedRectangle(cornerRadius: 18)
+                    .fill(Color.white.opacity(0.12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18)
+                            .stroke(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(0.3),
+                                        Color.white.opacity(0.1)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1.5
+                            )
+                    )
+                    .shadow(color: Color.white.opacity(0.12), radius: 10, x: 0, y: 5)
+            )
+
+            // Ellipse info overlay - floats above controls without shifting them
+            if isSynchronized && ellipseViewMode,
+               let selectedIndex = selectedEllipseIndex,
+               let analysis = analysisResult,
+               selectedIndex < analysis.ellipses.count {
+                // Ellipsen-Modus: Zeige ausgewählte Ellipse
+                let ellipse = analysis.ellipses[selectedIndex]
+                VStack(spacing: 2) {
+                    Text("Ellipse \(selectedIndex + 1)/\(totalEllipses)")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.8))
+
+                    HStack(spacing: 4) {
+                        Image(systemName: ellipse.angle > 0 ? "arrow.up.right" : "arrow.up.left")
+                            .font(.caption2)
+                            .foregroundColor(ellipse.angle > 0 ? LiquidGlassColors.accent : LiquidGlassColors.primary)
+
+                        Text(String(format: "%.1f°", abs(ellipse.angle)))
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundColor(.white)
+
+                        Text(ellipse.angle > 0 ? "rechts" : "links")
+                            .font(.caption2)
+                            .foregroundColor(ellipse.angle > 0 ? LiquidGlassColors.accent : LiquidGlassColors.primary)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.white.opacity(0.15))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(
+                                    LinearGradient(
+                                        colors: [
+                                            Color.white.opacity(0.4),
+                                            Color.white.opacity(0.15)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ),
+                                    lineWidth: 1.5
+                                )
+                        )
+                        .shadow(color: LiquidGlassColors.accent.opacity(0.2), radius: 12, x: 0, y: 4)
+                )
+                .offset(y: -50)
+            }
+        }
+    }
+
+    private func seekWithSync(to time: Double) {
+        let cmTime = CMTime(seconds: time, preferredTimescale: 1000)
+        player.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero)
+
+        // When synchronized, maintain the time offset
+        if isSynchronized, let syncPlayer = otherPlayer {
+            let syncTime: Double
+            if isPlayer2 {
+                // Player 2: otherTime = currentTime - offset
+                syncTime = time - timeOffset
+            } else {
+                // Player 1: otherTime = currentTime + offset
+                syncTime = time + timeOffset
+            }
+            let clampedSyncTime = max(0, min(syncTime, otherDuration))
+            syncPlayer.seek(to: CMTime(seconds: clampedSyncTime, preferredTimescale: 1000), toleranceBefore: .zero, toleranceAfter: .zero)
+            otherCurrentTime = clampedSyncTime
+        }
+    }
+
+    private func formatTime(_ seconds: Double) -> String {
+        let totalSeconds = Int(seconds)
+        let minutes = totalSeconds / 60
+        let secs = totalSeconds % 60
+        let milliseconds = Int((seconds - Double(totalSeconds)) * 100)
+        return String(format: "%02d:%02d.%02d", minutes, secs, milliseconds)
+    }
+}
+
+// MARK: - Dual Speed Control
+struct DualSpeedControl: View {
+    @Binding var speed1: Float
+    @Binding var speed2: Float
+    @Binding var hasTriggeredSwipe1: Bool
+    @Binding var hasTriggeredSwipe2: Bool
+    let isPlaying: Bool
+    let player1: AVPlayer?
+    let player2: AVPlayer?
+
+    // Haptisches Feedback
+    private let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+
+    // Speed arrays für beide Richtungen
+    private let speedsUp: [Float] = [1.0, 1.25, 1.5, 1.75, 2.0]
+    private let speedsDown: [Float] = [1.0, 0.8, 0.7, 0.6, 0.5]
+
+    // Alle Geschwindigkeiten kombiniert und sortiert
+    private var allSpeeds: [Float] {
+        Array(Set(speedsUp + speedsDown)).sorted()
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            // Video 1 Speed Control - Kompakt wie Back Button
+            speedButton(
+                speed: speed1,
+                hasTriggeredSwipe: $hasTriggeredSwipe1,
+                player: player1,
+                arrowIcon: "arrow.up",
+                onSpeedChange: { newSpeed in
+                    speed1 = newSpeed
+                }
+            )
+
+            // Vertikaler Divider
+            Rectangle()
+                .fill(Color.white.opacity(0.3))
+                .frame(width: 1, height: 18)
+
+            // Video 2 Speed Control - Kompakt wie Back Button
+            speedButton(
+                speed: speed2,
+                hasTriggeredSwipe: $hasTriggeredSwipe2,
+                player: player2,
+                arrowIcon: "arrow.down",
+                onSpeedChange: { newSpeed in
+                    speed2 = newSpeed
+                }
+            )
+        }
+        .frame(height: 18)
+        .foregroundColor(.white)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(width: 100)
+        .interactiveLiquidGlass(cornerRadius: 12)
+    }
+
+    @ViewBuilder
+    private func speedButton(
+        speed: Float,
+        hasTriggeredSwipe: Binding<Bool>,
+        player: AVPlayer?,
+        arrowIcon: String,
+        onSpeedChange: @escaping (Float) -> Void
+    ) -> some View {
+        // Kompakter Button wie Back Button - feste Breite basierend auf Inhalt
+        HStack(spacing: 3) {
+            Image(systemName: arrowIcon)
+                .font(.system(size: 9, weight: .semibold))
+
+            Text("\(formatSpeed(speed))x")
+                .font(.system(size: 9))
+        }
+        .contentShape(Rectangle())
+        .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            let verticalMovement = value.translation.height
+
+                            // Nach oben: 3px Schwelle, nach unten: 1.5px Schwelle
+                            let threshold: CGFloat = verticalMovement < 0 ? 3 : 1.5
+
+                            if abs(verticalMovement) >= threshold && !hasTriggeredSwipe.wrappedValue {
+                                hasTriggeredSwipe.wrappedValue = true
+                                impactFeedback.prepare()
+
+                                let direction = verticalMovement < 0 ? 1 : -1  // 1 = up (schneller), -1 = down (langsamer)
+
+                                // Einmaliger Swipe: eine Stufe
+                                let newSpeed = changeSpeedOneStep(currentSpeed: speed, direction: direction)
+                                onSpeedChange(newSpeed)
+
+                                // Update player rate
+                                if isPlaying {
+                                    player?.rate = newSpeed
+                                }
+
+                                impactFeedback.impactOccurred()
+
+                                let emoji = direction == 1 ? "⏩" : "⏪"
+                                print("\(emoji) Speed changed to \(newSpeed)x")
+                            }
+                        }
+                        .onEnded { value in
+                            let verticalMovement = value.translation.height
+
+                            // Wenn keine Swipe-Geste getriggert wurde und Bewegung minimal war → Tap
+                            if !hasTriggeredSwipe.wrappedValue && abs(verticalMovement) < 3 {
+                                // Tap resettet auf 1.0x
+                                onSpeedChange(1.0)
+                                if isPlaying {
+                                    player?.rate = 1.0
+                                }
+                                impactFeedback.impactOccurred(intensity: 0.7)
+                                print("🔄 Tap: Speed reset to 1.0x")
+                            }
+
+                            hasTriggeredSwipe.wrappedValue = false
+                        }
+                )
+    }
+
+    private func formatSpeed(_ speed: Float) -> String {
+        if speed == 1.0 {
+            return "1"
+        } else if speed == floor(speed) {
+            return String(format: "%.0f", speed)
+        } else {
+            // Eine Dezimalstelle für saubere Anzeige (0.8, 0.7, etc.)
+            let formatted = String(format: "%.1f", speed)
+            // Entferne .0 für ganze Zahlen
+            return formatted.hasSuffix(".0") ? String(formatted.dropLast(2)) : formatted
+        }
+    }
+
+    private func changeSpeedOneStep(currentSpeed: Float, direction: Int) -> Float {
+        let speeds = allSpeeds
+
+        if direction == 1 {
+            // Nach oben = schneller (step-by-step durch alle Geschwindigkeiten)
+            if let currentIndex = speeds.firstIndex(of: currentSpeed) {
+                let nextIndex = min(currentIndex + 1, speeds.count - 1)
+                if nextIndex != currentIndex {
+                    return speeds[nextIndex]
+                }
+            } else {
+                // Nicht in speeds, finde nächste höhere Speed
+                return speeds.first(where: { $0 > currentSpeed }) ?? speeds.last ?? 1.0
+            }
+        } else {
+            // Nach unten = langsamer (step-by-step durch alle Geschwindigkeiten)
+            if let currentIndex = speeds.firstIndex(of: currentSpeed) {
+                let nextIndex = max(currentIndex - 1, 0)
+                if nextIndex != currentIndex {
+                    return speeds[nextIndex]
+                }
+            } else {
+                // Nicht in speeds, finde nächste niedrigere Speed
+                return speeds.reversed().first(where: { $0 < currentSpeed }) ?? speeds.first ?? 1.0
+            }
+        }
+
+        return currentSpeed
     }
 }

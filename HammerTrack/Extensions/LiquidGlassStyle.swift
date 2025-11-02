@@ -1,7 +1,7 @@
 import SwiftUI
 
-// MARK: - iOS 26 Liquid Glass Design System
-// Based on Apple's WWDC 2025 Liquid Glass Guidelines
+// MARK: - Simple Liquid Glass Design System
+// Consistent design across all views
 
 /// Color palette for Liquid Glass design
 struct LiquidGlassColors {
@@ -9,10 +9,7 @@ struct LiquidGlassColors {
     static let secondary = Color(red: 0.5, green: 0.7, blue: 1.0)
     static let accent = Color(red: 0.0, green: 0.8, blue: 1.0)
 
-    // 30% more transparent for better video visibility
-    static let glassWhite = Color.white.opacity(0.05)
-    static let glassBorder = Color.white.opacity(0.12)
-    static let glassHighlight = Color.white.opacity(0.4)
+    static let glassBorder = Color.white.opacity(0.25)
 }
 
 /// Material styles for Liquid Glass effect
@@ -21,31 +18,27 @@ enum LiquidGlassMaterialStyle {
     case regular
     case thin
 
-    var blurRadius: CGFloat {
+    var opacity: Double {
         switch self {
-        case .ultra: return 14  // 30% less blur
-        case .regular: return 10 // 30% less blur
-        case .thin: return 7     // 30% less blur
+        case .ultra: return 0.18
+        case .regular: return 0.15
+        case .thin: return 0.12
         }
     }
 
-    var opacity: Double {
+    var borderOpacity: (top: Double, bottom: Double) {
         switch self {
-        case .ultra: return 0.10  // 30% more transparent
-        case .regular: return 0.07 // 30% more transparent
-        case .thin: return 0.03    // 30% more transparent
+        case .ultra: return (0.4, 0.2)
+        case .regular: return (0.35, 0.15)
+        case .thin: return (0.3, 0.1)
         }
     }
 }
 
-// MARK: - Liquid Glass Modifiers
+// MARK: - Simple Liquid Glass Modifiers
 
 extension View {
-    /// Applies iOS 26 Liquid Glass effect to the view
-    /// - Parameters:
-    ///   - style: The material style (ultra, regular, thin)
-    ///   - cornerRadius: Corner radius for the glass effect
-    ///   - borderColor: Optional border color
+    /// Applies simple Liquid Glass effect with opacity + gradient border
     func liquidGlassEffect(
         style: LiquidGlassMaterialStyle = .regular,
         cornerRadius: CGFloat = 20,
@@ -53,143 +46,165 @@ extension View {
     ) -> some View {
         self
             .background(
-                ZStack {
-                    // Base glass layer with blur
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .fill(LiquidGlassColors.glassWhite)
-                        .background(
-                            .ultraThinMaterial,
-                            in: RoundedRectangle(cornerRadius: cornerRadius)
-                        )
-
-                    // Gradient overlay for depth (more transparent)
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(0.12),
-                                    Color.white.opacity(0.03),
-                                    Color.clear
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .fill(Color.white.opacity(style.opacity))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius)
+                            .stroke(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(style.borderOpacity.top),
+                                        Color.white.opacity(style.borderOpacity.bottom)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1.5
                             )
-                        )
-
-                    // Border with glass effect
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .strokeBorder(borderColor, lineWidth: 1)
-                }
+                    )
+                    .shadow(color: Color.white.opacity(0.12), radius: 10, x: 0, y: 5)
             )
-            .shadow(color: Color.black.opacity(0.1), radius: 10, x: 0, y: 5)
     }
 
-    /// Applies interactive liquid glass effect with hover/press states
+    /// Interactive liquid glass for buttons
     func interactiveLiquidGlass(
         isPressed: Bool = false,
         cornerRadius: CGFloat = 20
     ) -> some View {
         self
             .background(
-                ZStack {
-                    // Dynamic background that responds to interaction
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .fill(
-                            LinearGradient(
-                                colors: isPressed ? [
-                                    LiquidGlassColors.primary.opacity(0.2),
-                                    LiquidGlassColors.secondary.opacity(0.12)
-                                ] : [
-                                    LiquidGlassColors.primary.opacity(0.12),
-                                    LiquidGlassColors.secondary.opacity(0.06)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .fill(
+                        isPressed ?
+                            LiquidGlassColors.primary.opacity(0.2) :
+                            Color.white.opacity(0.15)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius)
+                            .stroke(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(isPressed ? 0.5 : 0.35),
+                                        Color.white.opacity(isPressed ? 0.25 : 0.15)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1.5
                             )
-                        )
-                        .background(
-                            .ultraThinMaterial,
-                            in: RoundedRectangle(cornerRadius: cornerRadius)
-                        )
-
-                    // Highlight effect
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .fill(
-                            RadialGradient(
-                                colors: [
-                                    LiquidGlassColors.glassHighlight,
-                                    Color.clear
-                                ],
-                                center: .topLeading,
-                                startRadius: 0,
-                                endRadius: 200
-                            )
-                        )
-
-                    // Border
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .strokeBorder(
-                            isPressed ?
-                                LiquidGlassColors.accent.opacity(0.4) :
-                                LiquidGlassColors.glassBorder,
-                            lineWidth: 1.5
-                        )
-                }
+                    )
+                    .shadow(
+                        color: isPressed ?
+                            LiquidGlassColors.primary.opacity(0.3) :
+                            Color.white.opacity(0.12),
+                        radius: isPressed ? 8 : 12,
+                        x: 0,
+                        y: isPressed ? 3 : 5
+                    )
             )
-            .scaleEffect(isPressed ? 0.98 : 1.0)
-            .shadow(
-                color: isPressed ?
-                    LiquidGlassColors.primary.opacity(0.3) :
-                    Color.black.opacity(0.1),
-                radius: isPressed ? 15 : 10,
-                x: 0,
-                y: isPressed ? 3 : 5
-            )
+            .scaleEffect(isPressed ? 0.96 : 1.0)
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isPressed)
     }
 
-    /// Applies floating glass card effect
+    /// Floating glass card
     func floatingGlassCard(cornerRadius: CGFloat = 25) -> some View {
         self
             .padding()
             .background(
-                ZStack {
-                    // Main glass surface
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .fill(.ultraThinMaterial)
-
-                    // Depth gradient (more transparent)
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(0.08),
-                                    Color.white.opacity(0.03),
-                                    Color.black.opacity(0.01)
-                                ],
-                                startPoint: .top,
-                                endPoint: .bottom
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .fill(Color.white.opacity(0.15))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius)
+                            .stroke(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(0.4),
+                                        Color.white.opacity(0.15)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1.5
                             )
-                        )
+                    )
+                    .shadow(color: Color.black.opacity(0.2), radius: 20, x: 0, y: 10)
+                    .shadow(color: Color.white.opacity(0.15), radius: 8, x: 0, y: -4)
+            )
+    }
+}
 
-                    // Refraction effect at edges (more transparent)
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .strokeBorder(
+// MARK: - Simple Glass Button
+
+/// Simple glass button - consistent with all views
+struct iOS26GlassButton: View {
+    let icon: String
+    let action: () -> Void
+    let size: CGFloat
+    let isDisabled: Bool
+
+    @State private var isPressed = false
+
+    init(icon: String, size: CGFloat = 44, isDisabled: Bool = false, action: @escaping () -> Void) {
+        self.icon = icon
+        self.size = size
+        self.isDisabled = isDisabled
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: {
+            guard !isDisabled else { return }
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            action()
+        }) {
+            Image(systemName: icon)
+                .font(.system(size: size * 0.45, weight: .medium))
+                .foregroundStyle(isDisabled ? .white.opacity(0.3) : .white)
+                .frame(width: size, height: size)
+        }
+        .disabled(isDisabled)
+        .background(
+            Circle()
+                .fill(
+                    isPressed ?
+                        LiquidGlassColors.primary.opacity(0.2) :
+                        Color.white.opacity(0.12)
+                )
+                .overlay(
+                    Circle()
+                        .stroke(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(0.25),
-                                    Color.white.opacity(0.08),
-                                    Color.white.opacity(0.03)
+                                    Color.white.opacity(isPressed ? 0.4 : 0.3),
+                                    Color.white.opacity(isPressed ? 0.2 : 0.1)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             ),
                             lineWidth: 1.5
                         )
+                )
+                .shadow(
+                    color: isPressed ?
+                        LiquidGlassColors.primary.opacity(0.3) :
+                        Color.white.opacity(0.12),
+                    radius: isPressed ? 8 : 10,
+                    x: 0,
+                    y: isPressed ? 2 : 4
+                )
+        )
+        .scaleEffect(isPressed ? 0.94 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isPressed)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    guard !isDisabled else { return }
+                    isPressed = true
                 }
-            )
-            .shadow(color: Color.black.opacity(0.08), radius: 20, x: 0, y: 10)
-            .shadow(color: Color.white.opacity(0.1), radius: 1, x: 0, y: -1)
+                .onEnded { _ in
+                    isPressed = false
+                }
+        )
     }
 }
 
@@ -198,7 +213,7 @@ extension View {
 struct LiquidGlassBackground: View {
     var body: some View {
         ZStack {
-            // Base gradient - static, no animation
+            // Base gradient
             LinearGradient(
                 colors: [
                     Color(red: 0.1, green: 0.15, blue: 0.3),
@@ -210,7 +225,7 @@ struct LiquidGlassBackground: View {
             )
             .ignoresSafeArea()
 
-            // Floating orbs for depth
+            // Atmospheric orbs
             GeometryReader { geometry in
                 ZStack {
                     Circle()
@@ -218,16 +233,16 @@ struct LiquidGlassBackground: View {
                             RadialGradient(
                                 colors: [
                                     LiquidGlassColors.primary.opacity(0.3),
-                                    LiquidGlassColors.primary.opacity(0.1),
+                                    LiquidGlassColors.primary.opacity(0.15),
                                     Color.clear
                                 ],
                                 center: .center,
                                 startRadius: 0,
-                                endRadius: 200
+                                endRadius: 250
                             )
                         )
-                        .frame(width: 400, height: 400)
-                        .blur(radius: 60)
+                        .frame(width: 500, height: 500)
+                        .blur(radius: 80)
                         .offset(x: -100, y: -150)
 
                     Circle()
@@ -235,7 +250,24 @@ struct LiquidGlassBackground: View {
                             RadialGradient(
                                 colors: [
                                     LiquidGlassColors.secondary.opacity(0.25),
-                                    LiquidGlassColors.secondary.opacity(0.08),
+                                    LiquidGlassColors.secondary.opacity(0.12),
+                                    Color.clear
+                                ],
+                                center: .center,
+                                startRadius: 0,
+                                endRadius: 230
+                            )
+                        )
+                        .frame(width: 450, height: 450)
+                        .blur(radius: 70)
+                        .offset(x: geometry.size.width - 50, y: geometry.size.height - 230)
+
+                    Circle()
+                        .fill(
+                            RadialGradient(
+                                colors: [
+                                    LiquidGlassColors.accent.opacity(0.25),
+                                    LiquidGlassColors.accent.opacity(0.1),
                                     Color.clear
                                 ],
                                 center: .center,
@@ -243,9 +275,9 @@ struct LiquidGlassBackground: View {
                                 endRadius: 180
                             )
                         )
-                        .frame(width: 350, height: 350)
-                        .blur(radius: 50)
-                        .offset(x: geometry.size.width - 100, y: geometry.size.height - 200)
+                        .frame(width: 400, height: 400)
+                        .blur(radius: 60)
+                        .offset(x: geometry.size.width * 0.5, y: geometry.size.height * 0.4)
                 }
             }
         }
@@ -253,17 +285,23 @@ struct LiquidGlassBackground: View {
 }
 
 #Preview {
-    VStack(spacing: 30) {
-        Text("Liquid Glass Preview")
+    VStack(spacing: 40) {
+        Text("Simple Liquid Glass")
             .font(.title)
             .foregroundColor(.white)
-            .liquidGlassEffect()
+            .liquidGlassEffect(style: .regular)
             .padding()
 
-        Text("Floating Card")
+        Text("Glass Card")
             .font(.headline)
             .foregroundColor(.white)
             .floatingGlassCard()
+
+        HStack(spacing: 25) {
+            iOS26GlassButton(icon: "play.fill") {}
+            iOS26GlassButton(icon: "pause.fill") {}
+            iOS26GlassButton(icon: "stop.fill", size: 52) {}
+        }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(LiquidGlassBackground())

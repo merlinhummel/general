@@ -14,9 +14,13 @@ struct ZoomableVideoView: UIViewRepresentable {
     var onEllipseTapped: ((Int?) -> Void)?  // Callback wenn Ellipse getippt wird (nil = Modus beenden)
     
     func makeUIView(context: Context) -> UIView {
+        print("🎬 ZoomableVideoView makeUIView called")
+        print("   Player: \(player)")
+        print("   Player.currentItem: \(player.currentItem)")
+
         let containerView = UIView()
         containerView.backgroundColor = .black
-        
+
         // Create scroll view for zooming
         let scrollView = UIScrollView()
         scrollView.delegate = context.coordinator
@@ -29,14 +33,16 @@ struct ZoomableVideoView: UIViewRepresentable {
         scrollView.alwaysBounceVertical = true
         scrollView.alwaysBounceHorizontal = true
         containerView.addSubview(scrollView)
-        
+
         // Video container view (what we zoom)
         let videoContainerView = UIView()
-        scrollView.addSubview(videoContainerView)        
-        // Setup video layer with aspect fill to fill the container
+        scrollView.addSubview(videoContainerView)
+        // Setup video layer with aspect fit to show full video without cropping
         let playerLayer = AVPlayerLayer(player: player)
-        playerLayer.videoGravity = .resizeAspectFill // Changed to fill the container
+        playerLayer.videoGravity = .resizeAspect // Show full video without cropping
         videoContainerView.layer.addSublayer(playerLayer)
+
+        print("✅ PlayerLayer created with frame: \(playerLayer.frame)")
         
         // Setup trajectory layer with improved styling
         let trajectoryLayer = CAShapeLayer()
@@ -93,6 +99,14 @@ struct ZoomableVideoView: UIViewRepresentable {
     }
     
     func updateUIView(_ uiView: UIView, context: Context) {
+        // WICHTIG: Update player wenn er sich ändert
+        if let playerLayer = context.coordinator.playerLayer {
+            if playerLayer.player !== player {
+                print("🔄 Updating player in playerLayer")
+                playerLayer.player = player
+            }
+        }
+
         if showTrajectory {
             context.coordinator.updateTrajectory(
                 trajectory,
@@ -153,9 +167,13 @@ struct ZoomableVideoView: UIViewRepresentable {
                   let videoContainerView = videoContainerView,
                   let playerLayer = playerLayer,
                   let trajectoryLayer = trajectoryLayer,
-                  let currentPositionLayer = currentPositionLayer else { return }
-            
+                  let currentPositionLayer = currentPositionLayer else {
+                print("⚠️ updateLayout: Some views are nil!")
+                return
+            }
+
             let bounds = containerView.bounds
+            print("📐 updateLayout called - bounds: \(bounds)")
             scrollView.frame = bounds
             
             // Calculate video container size to fit the video
@@ -163,11 +181,11 @@ struct ZoomableVideoView: UIViewRepresentable {
             // Ensure positive dimensions
             videoSize.width = abs(videoSize.width)
             videoSize.height = abs(videoSize.height)
-            
-            guard videoSize.width > 0 && videoSize.height > 0 else {
-                // Fallback if video size is invalid
+
+            // Fallback if video size is invalid - WICHTIG: Kein return, sonst wird playerLayer.frame nie gesetzt!
+            if videoSize.width <= 0 || videoSize.height <= 0 {
                 videoSize = CGSize(width: 1920, height: 1080)
-                return
+                print("⚠️ Using fallback video size: \(videoSize)")
             }
             
             // iOS Galerie-Style: Video füllt immer die volle Breite
@@ -206,11 +224,15 @@ struct ZoomableVideoView: UIViewRepresentable {
 
             videoContainerView.frame = videoRect
             scrollView.contentSize = videoRect.size
-            
+
             // Update layers
             playerLayer.frame = videoContainerView.bounds
             trajectoryLayer.frame = videoContainerView.bounds
             currentPositionLayer.frame = videoContainerView.bounds
+
+            print("✅ PlayerLayer frame set to: \(playerLayer.frame)")
+            print("   VideoContainer bounds: \(videoContainerView.bounds)")
+            print("   VideoSize: \(videoSize)")
             
             // Center the content if it's smaller than scroll view
             centerContent()
