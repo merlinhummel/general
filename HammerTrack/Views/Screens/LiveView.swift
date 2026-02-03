@@ -19,12 +19,12 @@ struct LiveView: View {
             ZStack {
                 // Camera Preview with tap to focus
                 if cameraManager.isCameraReady {
-                    CameraPreviewFixed(session: cameraManager.session, onTap: { location in
-                        focusLocation = location
+                    CameraPreviewFixed(session: cameraManager.session, onTap: { screenPoint, devicePoint in
+                        focusLocation = screenPoint
                         withAnimation(.easeInOut(duration: 0.2)) {
                             showFocusIndicator = true
                         }
-                        cameraManager.setFocus(at: location)
+                        cameraManager.setFocus(at: devicePoint)
 
                         // Hide focus indicator after a moment
                         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
@@ -970,14 +970,27 @@ class CameraManager: NSObject, ObservableObject {
     
     func stopSession() {
         print("📴 Stopping camera session...")
-        
+
+        // Torch ausschalten vor dem Stoppen
+        if let device = currentCamera, device.hasTorch && device.torchMode != .off {
+            do {
+                try device.lockForConfiguration()
+                device.torchMode = .off
+                device.unlockForConfiguration()
+                print("🔦 Taschenlampe beim Session-Stop ausgeschaltet")
+            } catch {
+                print("⚠️ Fehler beim Ausschalten der Taschenlampe: \(error)")
+            }
+        }
+
         DispatchQueue.main.async {
             self.isCameraReady = false
+            self.isTorchOn = false
         }
-        
+
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
-            
+
             if self.session.isRunning {
                 self.session.stopRunning()
                 print("✅ Camera session stopped successfully")
@@ -1389,6 +1402,21 @@ class CameraManager: NSObject, ObservableObject {
     }
     
     func switchCamera() {
+        // Torch ausschalten vor dem Kamerawechsel (Frontkamera hat kein Torch)
+        if let device = currentCamera, device.hasTorch && device.torchMode != .off {
+            do {
+                try device.lockForConfiguration()
+                device.torchMode = .off
+                device.unlockForConfiguration()
+                print("🔦 Taschenlampe beim Kamerawechsel ausgeschaltet")
+            } catch {
+                print("⚠️ Fehler beim Ausschalten der Taschenlampe: \(error)")
+            }
+        }
+        DispatchQueue.main.async {
+            self.isTorchOn = false
+        }
+
         session.beginConfiguration()
 
         if let input = videoDeviceInput {
@@ -1402,6 +1430,60 @@ class CameraManager: NSObject, ObservableObject {
         }
 
         do {
+            // 🔥 KRITISCH: Kamera VOR dem Hinzufügen konfigurieren (verhindert -17281)
+            try newCamera.lockForConfiguration()
+
+            // Format suchen: 1080p 60 FPS
+            var formatFound = false
+            for format in newCamera.formats {
+                let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+                if dimensions.width == 1920 && dimensions.height == 1080 {
+                    for range in format.videoSupportedFrameRateRanges {
+                        if range.maxFrameRate >= 60.0 {
+                            newCamera.activeFormat = format
+                            formatFound = true
+                            break
+                        }
+                    }
+                    if formatFound { break }
+                }
+            }
+            // Fallback: 720p 60 FPS
+            if !formatFound {
+                for format in newCamera.formats {
+                    let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+                    if dimensions.width == 1280 && dimensions.height == 720 {
+                        for range in format.videoSupportedFrameRateRanges {
+                            if range.maxFrameRate >= 60.0 {
+                                newCamera.activeFormat = format
+                                formatFound = true
+                                break
+                            }
+                        }
+                        if formatFound { break }
+                    }
+                }
+            }
+
+            // FPS setzen
+            if let activeRange = newCamera.activeFormat.videoSupportedFrameRateRanges.first {
+                if activeRange.maxFrameRate >= 60.0 {
+                    newCamera.activeVideoMinFrameDuration = CMTime(value: 1, timescale: 60)
+                    newCamera.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: 60)
+                }
+            }
+
+            // Auto-focus / Auto-exposure
+            if newCamera.isFocusModeSupported(.continuousAutoFocus) {
+                newCamera.focusMode = .continuousAutoFocus
+            }
+            if newCamera.isExposureModeSupported(.continuousAutoExposure) {
+                newCamera.exposureMode = .continuousAutoExposure
+            }
+
+            newCamera.unlockForConfiguration()
+
+            // JETZT zur Session hinzufügen
             let newInput = try AVCaptureDeviceInput(device: newCamera)
             if session.canAddInput(newInput) {
                 session.addInput(newInput)
@@ -1414,20 +1496,17 @@ class CameraManager: NSObject, ObservableObject {
                     print("📷 Camera switched to: \(newCamera.position == .front ? "FRONT" : "BACK")")
                 }
 
-                // 🔥 WICHTIG: Video Connection für neue Kamera neu konfigurieren
+                // Video Connection für neue Kamera neu konfigurieren
                 if let connection = videoDataOutput.connection(with: .video) {
                     connection.isEnabled = true
 
-                    // Set video orientation based on iOS version
                     if #available(iOS 17.0, *) {
                         if connection.isVideoRotationAngleSupported(90) {
                             connection.videoRotationAngle = 90
-                            print("✅ Video rotation set to 90 degrees for \(newCamera.position == .front ? "FRONT" : "BACK") camera")
                         }
                     } else {
                         if connection.isVideoOrientationSupported {
                             connection.videoOrientation = .portrait
-                            print("✅ Video orientation set to portrait for \(newCamera.position == .front ? "FRONT" : "BACK") camera")
                         }
                     }
 
@@ -1435,7 +1514,7 @@ class CameraManager: NSObject, ObservableObject {
                 }
             }
         } catch {
-            print("Error switching camera: \(error)")
+            print("❌ Error switching camera: \(error)")
         }
 
         session.commitConfiguration()
@@ -1599,8 +1678,8 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
 // Rest of the UI components remain the same...
 struct CameraPreviewFixed: UIViewRepresentable {
     let session: AVCaptureSession
-    let onTap: ((CGPoint) -> Void)?
-    
+    let onTap: ((CGPoint, CGPoint) -> Void)?  // (screenPoint, devicePoint)
+
     func makeUIView(context: Context) -> UIView {
         print("🎥 Creating camera preview view...")
         let view = CameraPreviewView()
@@ -1612,8 +1691,14 @@ struct CameraPreviewFixed: UIViewRepresentable {
         // Ensure connection is properly configured
         if let connection = previewLayer.connection {
             connection.isEnabled = true
-            if connection.isVideoOrientationSupported {
-                connection.videoOrientation = .portrait
+            if #available(iOS 17.0, *) {
+                if connection.isVideoRotationAngleSupported(90) {
+                    connection.videoRotationAngle = 90
+                }
+            } else {
+                if connection.isVideoOrientationSupported {
+                    connection.videoOrientation = .portrait
+                }
             }
             print("✅ Preview layer connection configured")
         } else {
@@ -1641,21 +1726,21 @@ struct CameraPreviewFixed: UIViewRepresentable {
     }
     
     class Coordinator: NSObject {
-        let onTap: ((CGPoint) -> Void)?
+        let onTap: ((CGPoint, CGPoint) -> Void)?  // (screenPoint, devicePoint)
         weak var previewLayer: AVCaptureVideoPreviewLayer?
-        
-        init(onTap: ((CGPoint) -> Void)?) {
+
+        init(onTap: ((CGPoint, CGPoint) -> Void)?) {
             self.onTap = onTap
         }
-        
+
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
             let location = gesture.location(in: gesture.view)
-            
+
             if let previewLayer = previewLayer {
                 let devicePoint = previewLayer.captureDevicePointConverted(fromLayerPoint: location)
-                onTap?(location)
+                onTap?(location, devicePoint)
             } else {
-                onTap?(location)
+                onTap?(location, location)
             }
         }
     }
