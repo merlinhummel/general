@@ -37,9 +37,9 @@ struct ZoomableVideoView: UIViewRepresentable {
         // Video container view (what we zoom)
         let videoContainerView = UIView()
         scrollView.addSubview(videoContainerView)
-        // Setup video layer with aspect fit to show full video without cropping
+        // Setup video layer - videoGravity wird in updateLayout() basierend auf Video-Format gesetzt
         let playerLayer = AVPlayerLayer(player: player)
-        playerLayer.videoGravity = .resizeAspect // Show full video without cropping
+        playerLayer.videoGravity = .resizeAspectFill // Default, wird in updateLayout() angepasst
         videoContainerView.layer.addSublayer(playerLayer)
 
         print("✅ PlayerLayer created with frame: \(playerLayer.frame)")
@@ -104,6 +104,21 @@ struct ZoomableVideoView: UIViewRepresentable {
             if playerLayer.player !== player {
                 print("🔄 Updating player in playerLayer")
                 playerLayer.player = player
+
+                // Reset zoom state when player changes (handles same-video reanalysis)
+                print("🔄 Resetting zoom state for new video")
+                context.coordinator.currentZoomScale = 1.0
+                context.coordinator.currentContentOffset = .zero
+                context.coordinator.scrollView?.setZoomScale(1.0, animated: false)
+                context.coordinator.scrollView?.setContentOffset(.zero, animated: false)
+
+                // ⚡ WICHTIG: Force layout update bei Player-Wechsel
+                // Reset lastBounds damit Layout neu berechnet wird
+                context.coordinator.lastBounds = .zero
+                print("🔄 Forcing layout update for new player")
+
+                // Beobachte wenn Video bereit ist für korrektes Layout
+                context.coordinator.observePlayerItemStatus()
             }
         }
 
@@ -150,6 +165,32 @@ struct ZoomableVideoView: UIViewRepresentable {
         var currentAnalysis: TrajectoryAnalysis?
         var currentVideoRect: CGRect = .zero
 
+        // Status observer
+        var statusObserver: NSKeyValueObservation?
+
+        deinit {
+            statusObserver?.invalidate()
+        }
+
+        func observePlayerItemStatus() {
+            // Entferne alten Observer
+            statusObserver?.invalidate()
+
+            guard let playerItem = playerLayer?.player?.currentItem else { return }
+
+            // Beobachte Status-Änderungen
+            statusObserver = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
+                if item.status == .readyToPlay {
+                    print("✅ PlayerItem ready - updating layout for correct video size")
+                    DispatchQueue.main.async {
+                        // Force layout update mit korrekter Video-Größe
+                        self?.lastBounds = .zero
+                        self?.updateLayoutIfNeeded()
+                    }
+                }
+            }
+        }
+
         func updateLayoutIfNeeded() {
             guard let containerView = containerView else { return }
             let bounds = containerView.bounds
@@ -172,58 +213,105 @@ struct ZoomableVideoView: UIViewRepresentable {
                 return
             }
 
+            // Verwende containerView bounds - diese sollten durch .ignoresSafeArea() bereits den vollen Bereich umfassen
             let bounds = containerView.bounds
-            print("📐 updateLayout called - bounds: \(bounds)")
+
+            // Debug: Zeige echten Screen-Bereich vs Container-Bereich
+            if let window = containerView.window {
+                let screenBounds = UIScreen.main.bounds
+                let windowBounds = window.bounds
+                let safeAreaInsets = window.safeAreaInsets
+
+                print("📐 Screen & Container Info:")
+                print("   Screen bounds: \(screenBounds.width) × \(screenBounds.height)")
+                print("   Window bounds: \(windowBounds.width) × \(windowBounds.height)")
+                print("   Safe area insets - top: \(safeAreaInsets.top), bottom: \(safeAreaInsets.bottom)")
+                print("   Container bounds: \(bounds.width) × \(bounds.height)")
+            }
+
+            print("📐 updateLayout called - using bounds: \(bounds)")
             scrollView.frame = bounds
-            
-            // Calculate video container size to fit the video
-            var videoSize = playerLayer.player?.currentItem?.presentationSize ?? CGSize(width: 1920, height: 1080)
-            // Ensure positive dimensions
-            videoSize.width = abs(videoSize.width)
-            videoSize.height = abs(videoSize.height)
 
-            // Fallback if video size is invalid - WICHTIG: Kein return, sonst wird playerLayer.frame nie gesetzt!
+            // Calculate video container size from the actual video track
+            var videoSize: CGSize = .zero
+
+            // Versuche die echte Video-Größe aus dem Track zu holen
+            if let playerItem = playerLayer.player?.currentItem,
+               let asset = playerItem.asset as? AVURLAsset {
+
+                // Synchron die Video-Größe holen (Tracks sind bereits geladen)
+                if let track = asset.tracks(withMediaType: .video).first {
+                    let naturalSize = track.naturalSize
+                    let transform = track.preferredTransform
+
+                    // Wende Transform an für korrekte Rotation
+                    let transformedSize = naturalSize.applying(transform)
+                    videoSize = CGSize(
+                        width: abs(transformedSize.width),
+                        height: abs(transformedSize.height)
+                    )
+                    print("✅ Got video size from track: \(videoSize)")
+                }
+            }
+
+            // Fallback wenn Track-Größe nicht verfügbar
             if videoSize.width <= 0 || videoSize.height <= 0 {
-                videoSize = CGSize(width: 1920, height: 1080)
-                print("⚠️ Using fallback video size: \(videoSize)")
-            }
-            
-            // iOS Galerie-Style: Video füllt immer die volle Breite
-            // WICHTIG: Keine schwarzen Ränder links/rechts!
-            let containerAspect = bounds.width / bounds.height
-            let videoAspect = videoSize.width / videoSize.height
-
-            // Berechne FIT nach BREITE (Video immer volle Breite) - DAS ist die Basis-Größe!
-            let fitScale = bounds.width / videoSize.width
-
-            // Berechne aspect FILL Skalierung (für maximales Zoom)
-            let fillScale: CGFloat
-            if containerAspect > videoAspect {
-                fillScale = bounds.width / videoSize.width
-            } else {
-                fillScale = bounds.height / videoSize.height
+                // Versuche presentationSize als Backup
+                let presentationSize = playerLayer.player?.currentItem?.presentationSize ?? .zero
+                if presentationSize.width > 0 && presentationSize.height > 0 {
+                    videoSize = CGSize(
+                        width: abs(presentationSize.width),
+                        height: abs(presentationSize.height)
+                    )
+                    print("⚠️ Using presentationSize: \(videoSize)")
+                } else {
+                    // Letzter Fallback: Benutze Container-Größe (AspectFill macht dann keine Cuts)
+                    videoSize = bounds.size
+                    print("⚠️ Using container bounds as fallback: \(videoSize)")
+                }
             }
 
-            // minimumZoomScale = 1.0 (keine Verkleinerung vom FIT erlaubt!)
+            // Skalierung basierend auf Video-Format
+            let widthScale = bounds.width / videoSize.width
+            let heightScale = bounds.height / videoSize.height
+
+            // IMMER ASPECT FILL: Video füllt IMMER den gesamten Container
+            let scale = max(widthScale, heightScale)
+            let scalingMode = "ASPECT FILL (Always)"
+            playerLayer.videoGravity = .resizeAspectFill
+
+            print("📐 Video scaling (\(scalingMode)):")
+            print("   Container: \(bounds.width) × \(bounds.height)")
+            print("   Video: \(videoSize.width) × \(videoSize.height)")
+            print("   widthScale: \(widthScale), heightScale: \(heightScale)")
+            print("   finalScale: \(scale)")
+            print("   videoGravity: \(playerLayer.videoGravity.rawValue)")
+
+            // minimumZoomScale = 1.0 (Video in Ausgangsposition bei 1.0x)
             scrollView.minimumZoomScale = 1.0
 
-            // maximumZoomScale = Zoom bis zum aspect FILL und darüber hinaus
-            let maxZoomScale = max(fillScale / fitScale, 1.0) * 10.0
-            scrollView.maximumZoomScale = maxZoomScale
+            // maximumZoomScale = 10x zoom
+            scrollView.maximumZoomScale = 10.0
 
-            // Video-Container in FIT Größe (volle Breite) - Basis für Zoom
-            let scaledSize = CGSize(width: videoSize.width * fitScale, height: videoSize.height * fitScale)
+            // Video-Container in berechneter Größe
+            let scaledSize = CGSize(
+                width: videoSize.width * scale,
+                height: videoSize.height * scale
+            )
 
-            // Video horizontal zentriert (nimmt volle Breite ein)
-            let videoRect = CGRect(
-                x: (bounds.width - scaledSize.width) / 2,
-                y: (bounds.height - scaledSize.height) / 2,
+            // WICHTIG: videoContainerView startet bei (0, 0) - Zentrierung über contentInset!
+            videoContainerView.frame = CGRect(
+                x: 0,
+                y: 0,
                 width: scaledSize.width,
                 height: scaledSize.height
             )
 
-            videoContainerView.frame = videoRect
-            scrollView.contentSize = videoRect.size
+            // contentSize = Größe des scrollbaren Inhalts (das Video)
+            scrollView.contentSize = scaledSize
+
+            print("   Scaled size: \(scaledSize.width) × \(scaledSize.height)")
+            print("   VideoContainer frame: \(videoContainerView.frame)")
 
             // Update layers
             playerLayer.frame = videoContainerView.bounds
@@ -233,22 +321,14 @@ struct ZoomableVideoView: UIViewRepresentable {
             print("✅ PlayerLayer frame set to: \(playerLayer.frame)")
             print("   VideoContainer bounds: \(videoContainerView.bounds)")
             print("   VideoSize: \(videoSize)")
-            
+            print("   ScrollView contentSize: \(scrollView.contentSize)")
+
             // Center the content if it's smaller than scroll view
             centerContent()
-            
-            // Restore zoom state if we had one and it was lost
-            if currentZoomScale > 1.0 && scrollView.zoomScale == 1.0 && !isRestoringZoom {
-                isRestoringZoom = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self, weak scrollView] in
-                    guard let self = self, let scrollView = scrollView else { return }
-                    scrollView.setZoomScale(self.currentZoomScale, animated: false)
-                    if self.currentContentOffset != .zero {
-                        scrollView.setContentOffset(self.currentContentOffset, animated: false)
-                    }
-                    self.isRestoringZoom = false
-                }
-            }
+
+            // WICHTIG: Zoom-Wiederherstellung NICHT mehr hier!
+            // Mit UUID-basierter View-Recreation wird die View bei jeder Analyse neu erstellt
+            // → Zoom startet automatisch bei 1.0x
         }        
         func centerContent() {
             guard let scrollView = scrollView else { return }
@@ -257,19 +337,46 @@ struct ZoomableVideoView: UIViewRepresentable {
             let zoomedWidth = scrollView.contentSize.width * scrollView.zoomScale
             let zoomedHeight = scrollView.contentSize.height * scrollView.zoomScale
 
-            // Berechne Offsets
-            // HORIZONTAL: Video soll IMMER zentriert sein (volle Breite oder größer)
-            // Bei minZoom: Video nimmt exakt volle Breite ein (kein offset nötig)
-            // Bei größerem Zoom: Video wird zentriert wenn kleiner als bounds
-            let offsetX = max((scrollView.bounds.width - zoomedWidth) * 0.5, 0)
+            // HORIZONTAL: Zentriere Video
+            var insetX: CGFloat = 0
+            var offsetX: CGFloat = scrollView.contentOffset.x
 
-            // VERTIKAL: Video zentrieren wenn kleiner als bounds (oben/unten schwarze Balken erlaubt)
-            let offsetY = max((scrollView.bounds.height - zoomedHeight) * 0.5, 0)
+            if zoomedWidth > scrollView.bounds.width {
+                // Video ist BREITER als Container (Hochformat) → Zentriere via contentOffset
+                let centerOffset = (zoomedWidth - scrollView.bounds.width) * 0.5
+                offsetX = centerOffset
+                insetX = 0
+            } else {
+                // Video ist SCHMALER als Container (Querformat) → Zentriere via contentInset
+                insetX = (scrollView.bounds.width - zoomedWidth) * 0.5
+                offsetX = 0
+            }
+
+            // VERTIKAL: Zentriere Video wenn kleiner als Container
+            var insetY: CGFloat = 0
+            var offsetY: CGFloat = scrollView.contentOffset.y
+
+            if zoomedHeight > scrollView.bounds.height {
+                // Video ist HÖHER als Container → Zentriere via contentOffset
+                let centerOffset = (zoomedHeight - scrollView.bounds.height) * 0.5
+                offsetY = centerOffset
+                insetY = 0
+            } else {
+                // Video ist NIEDRIGER als Container → Zentriere via contentInset
+                insetY = (scrollView.bounds.height - zoomedHeight) * 0.5
+                offsetY = 0
+            }
 
             // Nur setzen wenn sich was geändert hat (Performance)
-            let newInset = UIEdgeInsets(top: offsetY, left: offsetX, bottom: offsetY, right: offsetX)
+            let newInset = UIEdgeInsets(top: insetY, left: insetX, bottom: insetY, right: insetX)
             if scrollView.contentInset != newInset {
                 scrollView.contentInset = newInset
+            }
+
+            // Setze contentOffset für Zentrierung bei größerem Content
+            let newOffset = CGPoint(x: offsetX, y: offsetY)
+            if scrollView.contentOffset != newOffset && scrollView.zoomScale == 1.0 {
+                scrollView.contentOffset = newOffset
             }
         }
         
@@ -469,6 +576,9 @@ struct ZoomableVideoView: UIViewRepresentable {
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            // Center content while scrolling (for consistent positioning)
+            centerContent()
+
             // Keep content offset updated when zoomed
             if scrollView.zoomScale > 1.0 {
                 currentContentOffset = scrollView.contentOffset

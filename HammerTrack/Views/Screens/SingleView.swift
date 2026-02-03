@@ -25,19 +25,13 @@ struct SingleView: View {
     @State private var selectedEllipseIndex: Int? = nil  // Welche Ellipse ist ausgewählt (0-basiert)
     @State private var ellipseViewMode: Bool = false  // Nur ausgewählte Ellipse anzeigen?
 
-    // PLAYBACK SPEED (Persistent Storage)
-    @AppStorage("playbackSpeed") private var playbackSpeedStorage: Double = 1.0
+    // PLAYBACK SPEED (Reset on each view appearance)
+    @State private var playbackSpeed: Float = 1.0
     @State private var hasTriggeredSwipe = false
 
     // Loading Animation
     @State private var isLoadingVideo = false
     @State private var rotationAngle: Double = 0
-
-    // Helper for Float conversion
-    private var playbackSpeed: Float {
-        get { Float(playbackSpeedStorage) }
-        nonmutating set { playbackSpeedStorage = Double(newValue) }
-    }
 
     @Environment(\.presentationMode) var presentationMode
     
@@ -211,10 +205,7 @@ struct SingleView: View {
                         isPlaying: $isPlaying,
                         currentTime: $currentTime,
                         duration: $duration,
-                        playbackSpeed: Binding(
-                            get: { Float(playbackSpeedStorage) },
-                            set: { playbackSpeedStorage = Double($0) }
-                        ),
+                        playbackSpeed: $playbackSpeed,
                         hasTriggeredSwipe: $hasTriggeredSwipe,
                         showTrajectory: $showTrajectory,
                         currentEllipseAngle: currentEllipseAngle,
@@ -244,32 +235,56 @@ struct SingleView: View {
         }
         .onChange(of: selectedVideoURL) { _, newURL in
             if let url = newURL {
+                // Reset analysis state
+                hammerTracker.currentTrajectory = nil
+                hammerTracker.analysisResult = nil
+
+                // Reset playback state
+                currentTime = 0
+                isPlaying = false
+                ellipseViewMode = false
+                selectedEllipseIndex = nil
+
                 setupPlayer(with: url)
                 processVideo(url: url)
             }
         }
         .onChange(of: isPlaying) { _, playing in
             if playing {
-                player?.rate = playbackSpeed
+                // Apply playback speed when starting (don't reset it!)
                 player?.play()
+                player?.rate = playbackSpeed
             } else {
                 player?.pause()
             }
         }
         .onChange(of: playbackSpeed) { _, newSpeed in
+            // Update speed ONLY if currently playing (don't auto-start!)
             if isPlaying {
                 player?.rate = newSpeed
+                print("⚡ Video speed changed to \(newSpeed)x while playing")
+            } else {
+                print("⚡ Video speed stored as \(newSpeed)x (will apply on play)")
             }
+        }
+        .onAppear {
+            // Reset playback speed to 1.0x when view appears
+            playbackSpeed = 1.0
+            print("🔄 SingleView appeared - playback speed reset to 1.0x")
         }
         .onDisappear {
             if let observer = timeObserver {
                 player?.removeTimeObserver(observer)
             }
+            // Reset playback speed when leaving the view
+            playbackSpeed = 1.0
+            print("🔄 SingleView dismissed - playback speed reset to 1.0x")
         }
     }
     
     private func setupPlayer(with url: URL) {
-        player = AVPlayer(url: url)
+        let playerItem = AVPlayerItem(url: url)
+        player = AVPlayer(playerItem: playerItem)
 
         // Get video duration and size
         let asset = AVURLAsset(url: url)
@@ -297,12 +312,22 @@ struct SingleView: View {
                 }
             }
         }
-        
-        // Add time observer
+
+        // Add time observer with video end detection
         if let player = player {
             let interval = CMTime(seconds: 0.01, preferredTimescale: 600)
-            timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
+            timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [self] time in
                 currentTime = time.seconds
+
+                // Check if video reached the end
+                if currentTime >= duration - 0.1 && isPlaying {
+                    DispatchQueue.main.async {
+                        player.seek(to: .zero)
+                        isPlaying = false
+                        print("🔄 Video ended - showing Play button")
+                    }
+                }
+
                 updateCurrentEllipseAngle()
             }
         }
@@ -726,18 +751,6 @@ struct VideoControlsView: View {
                     .offset(y: -50)
             }
         }
-        .onChange(of: isPlaying) { _, playing in
-            if playing {
-                NotificationCenter.default.addObserver(
-                    forName: .AVPlayerItemDidPlayToEndTime,
-                    object: player.currentItem,
-                    queue: .main
-                ) { _ in
-                    isPlaying = false
-                    seek(to: 0)
-                }
-            }
-        }
     }
 
     // MARK: - Speed Control Button (iOS 26 Interactive Glass)
@@ -786,9 +799,8 @@ struct SpeedControlButton: View {
                             let newSpeed = changeSpeedOneStep(playbackSpeed, direction)
                             playbackSpeed = newSpeed
 
-                            if isPlaying {
-                                player.rate = newSpeed
-                            }
+                            // WICHTIG: Nicht player.rate setzen - das startet das Video!
+                            // Das wird von onChange(of: playbackSpeed) gehandelt wenn Video spielt
 
                             impactFeedback.impactOccurred()
                         }
@@ -799,9 +811,8 @@ struct SpeedControlButton: View {
                         if !hasTriggeredSwipe && abs(verticalMovement) < 3 {
                             // Tap resets to 1.0x
                             playbackSpeed = 1.0
-                            if isPlaying {
-                                player.rate = 1.0
-                            }
+                            // WICHTIG: Nicht player.rate setzen - das startet das Video!
+                            // Das wird von onChange(of: playbackSpeed) gehandelt wenn Video spielt
                             impactFeedback.impactOccurred(intensity: 0.7)
                         }
 

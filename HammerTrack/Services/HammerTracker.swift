@@ -12,6 +12,7 @@ struct TrackedFrame {
     let boundingBox: CGRect
     let confidence: Float
     let timestamp: TimeInterval
+    let torsoAngle: Double?   // Oberkörper-Winkel (0° = aufrecht, positiv = vorne, negativ = hinten)
 }
 
 struct Trajectory {
@@ -100,6 +101,7 @@ struct Ellipse {
     let endPoint: TurningPoint
     let angle: Double
     let frames: [TrackedFrame]
+    let torsoAngleAtSecondPoint: Double?  // Oberkörper-Winkel am Umkehrpunkt 1 (2. Punkt der Drehung)
 }
 
 struct TrajectoryAnalysis {
@@ -291,10 +293,10 @@ class HammerTracker: ObservableObject {
         }
     }    
     // MARK: - Live Camera Processing
-    func processLiveFrame(_ imageBuffer: CVImageBuffer, frameNumber: Int) {
+    func processLiveFrame(_ imageBuffer: CVImageBuffer, frameNumber: Int, torsoAngle: Double? = nil) {
         let timestamp = Date().timeIntervalSince1970
-        detectHammer(in: imageBuffer, frameNumber: frameNumber, timestamp: timestamp)
-        
+        detectHammer(in: imageBuffer, frameNumber: frameNumber, timestamp: timestamp, torsoAngle: torsoAngle)
+
         // For live view, we store frames and can analyze them later
         Task { @MainActor in
             self.currentTrajectory = Trajectory(
@@ -306,7 +308,7 @@ class HammerTracker: ObservableObject {
     }
     
     // MARK: - Hammer Detection with Proper Coordinate Transformation
-    private func detectHammer(in imageBuffer: CVImageBuffer, frameNumber: Int, timestamp: TimeInterval) {
+    private func detectHammer(in imageBuffer: CVImageBuffer, frameNumber: Int, timestamp: TimeInterval, torsoAngle: Double? = nil) {
         guard let model = detectionModel else {
             if frameNumber % 30 == 0 {
                 print("No detection model available")
@@ -316,35 +318,36 @@ class HammerTracker: ObservableObject {
 
         let request = VNCoreMLRequest(model: model) { [weak self] request, error in
             guard let self = self else { return }
-            
+
             if let error = error {
                 print("Detection error: \(error)")
                 return
             }
-            
-            guard let results = request.results as? [VNRecognizedObjectObservation] else { 
+
+            guard let results = request.results as? [VNRecognizedObjectObservation] else {
                 print("No results from detection")
-                return 
+                return
             }
-            
+
             // Debug output every second (disabled for performance)
             // if frameNumber % 30 == 0 && !results.isEmpty {
             //     print("Frame \(frameNumber): Found \(results.count) detections")
             // }
-            
+
             // Find the best detection (highest confidence)
             if let bestDetection = results.max(by: { $0.confidence < $1.confidence }),
                bestDetection.confidence >= self.confidenceThreshold {
                 let boundingBox = bestDetection.boundingBox
-                
+
                 // When using videoOrientation in the handler, we should get
                 // correctly oriented coordinates - no transformation needed
-                
+
                 let trackedFrame = TrackedFrame(
                     frameNumber: frameNumber,
                     boundingBox: boundingBox,
                     confidence: bestDetection.confidence,
-                    timestamp: timestamp
+                    timestamp: timestamp,
+                    torsoAngle: torsoAngle
                 )
 
                 self.trackedFrames.append(trackedFrame)
@@ -550,11 +553,16 @@ class HammerTracker: ObservableObject {
             // Frames für diese Ellipse (vom ersten bis zum dritten Punkt)
             let ellipseFrames = Array(trackedFrames[firstPoint.frameIndex...thirdPoint.frameIndex])
 
+            // 🎯 WICHTIG: Torso-Winkel am Umkehrpunkt 1 (2. Punkt = secondPoint/endPoint)
+            // Der secondPoint.frameIndex zeigt auf den Frame im trackedFrames Array
+            let torsoAngleAtSecondPoint = trackedFrames[secondPoint.frameIndex].torsoAngle
+
             let ellipse = Ellipse(
                 startPoint: firstPoint,
                 endPoint: secondPoint, // Winkel basiert auf ersten beiden Punkten
                 angle: angle,
-                frames: ellipseFrames
+                frames: ellipseFrames,
+                torsoAngleAtSecondPoint: torsoAngleAtSecondPoint
             )
 
             ellipses.append(ellipse)

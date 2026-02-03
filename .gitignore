@@ -34,3 +34,14 @@ Carthage/Build/
 *~.nib
 *.tmp
 *.temp
+
+# Build logs
+build*.log
+*.log
+
+# AI Assistant files
+.claude-flow/
+.swarm/
+
+# Profiling files
+*.trace/

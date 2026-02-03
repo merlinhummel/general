@@ -71,7 +71,17 @@ struct LiveView: View {
                         .allowsHitTesting(false)
                 }
 
-            
+                // 🧪 Torso Angle Overlay (oben mittig)
+                if let torsoAngle = cameraManager.currentTorsoAngle {
+                    VStack {
+                        TorsoAngleView(angle: torsoAngle)
+                            .padding(.top, 80)
+                        Spacer()
+                    }
+                    .allowsHitTesting(false)
+                }
+            }
+
             // Overlay: Floating UI Elements
             VStack(spacing: 0) {
                 // Floating Header Buttons (like SingleView)
@@ -176,7 +186,6 @@ struct LiveView: View {
             }
             .frame(maxHeight: .infinity, alignment: .top)  // VStack nimmt volle Höhe ein, Elemente oben ausgerichtet
             .ignoresSafeArea(edges: .bottom)  // Ignoriere Safe Area unten, damit 20px wirklich zum physischen Bildschirmrand sind
-            }
         }
         .navigationBarHidden(true)
         .onAppear {
@@ -224,7 +233,7 @@ struct LiveView: View {
 class CameraManager: NSObject, ObservableObject {
     @Published var session = AVCaptureSession()
     @Published var showAlert = false
-    @Published var flashMode: AVCaptureDevice.FlashMode = .off
+    @Published var isTorchOn = false  // Taschenlampe (für Live-Kamera)
     @Published var isDetectingPose = false
     @Published var isActivelyTracking = false
     @Published var poseDetectionStatus = "Warte auf Arm-Bewegung..."
@@ -241,6 +250,9 @@ class CameraManager: NSObject, ObservableObject {
     @Published var detectedHammerBox: CGRect?
     private var hammerDetectionModel: VNCoreMLModel?
 
+    // 🧪 Torso Angle Display
+    @Published var currentTorsoAngle: Double?
+
     // Analysis mode (nur trajectory für Ellipsen-Winkel)
     var analysisMode: AnalysisMode = .trajectory
     
@@ -249,6 +261,11 @@ class CameraManager: NSObject, ObservableObject {
     private var currentCamera: AVCaptureDevice?
     private var videoDeviceInput: AVCaptureDeviceInput?
     private let videoDataOutputQueue = DispatchQueue(label: "VideoDataOutput", qos: .userInitiated, attributes: [], autoreleaseFrequency: .workItem)
+
+    // 📷 Adaptive Multi-Kamera Support
+    // Dictionary: Zoom-Faktor → Kamera-Device (0.5x → Ultra Wide, 1.0x → Wide Angle, 2x → Telephoto, etc.)
+    private var availableCameras: [CGFloat: AVCaptureDevice] = [:]
+    private var cameraZoomFactors: [CGFloat] = []
     
     // KRITISCH: Dedizierte Queue für alle Session-Operationen
     private let sessionQueue = DispatchQueue(label: "SessionQueue", qos: .userInitiated)
@@ -272,12 +289,16 @@ class CameraManager: NSObject, ObservableObject {
     // 🔥 CRITICAL FIX: Frame throttling für Pose Detection während Tracking
     private var poseFrameCounter = 0
     private let poseProcessingInterval = 3 // Process every 3rd frame during tracking = ~20 FPS
-    
+
     // Pose Detection
     private var poseRequest: VNDetectHumanBodyPoseRequest?
     private var lastArmPosition: VNRecognizedPoint?
     private var armRaisedStartTime: Date?
     private let armRaisedThreshold: TimeInterval = 0.2 // Arm muss 0.2 Sekunden gehoben bleiben
+
+    // 🧪 Torso Angle Logging (für Testing)
+    private var torsoAngleLogCounter = 0
+    private let torsoAngleLogInterval = 10 // Log alle 10 Frames (~6x pro Sekunde bei 60 FPS)
 
     // Pose Analyzer for knee angles
     private let poseAnalyzer = PoseAnalyzer()
@@ -403,6 +424,22 @@ class CameraManager: NSObject, ObservableObject {
             }
         }
 
+        // 🧪 TESTING: Kontinuierliche Berechnung des Oberkörper-Winkels (IMMER wenn Pose Detection aktiv)
+        if isPoseDetectionEnabled {
+            torsoAngleLogCounter += 1
+
+            if torsoAngleLogCounter >= torsoAngleLogInterval {
+                torsoAngleLogCounter = 0
+
+                // Berechne Torso-Winkel und update UI
+                let torsoAngle = calculateTorsoAngle(observation: observation)
+
+                DispatchQueue.main.async { [weak self] in
+                    self?.currentTorsoAngle = torsoAngle
+                }
+            }
+        }
+
         // Check for arm angle ONLY when NOT tracking (während Tracking: nur Visualisierung)
         if isPoseDetectionEnabled && !isActivelyTracking && isAnalyzing && (analysisMode == .trajectory || analysisMode == .both) {
             do {
@@ -512,7 +549,69 @@ class CameraManager: NSObject, ObservableObject {
 
         return clampedAngle
     }
-    
+
+    /// Berechnet Oberkörper-Neigungswinkel (nach vorne/hinten)
+    /// - Parameter observation: Die Pose-Observation
+    /// - Returns: Winkel in Grad (positiv = nach vorne gebeugt, negativ = nach hinten gelehnt), nil bei ungültigen Werten
+    ///
+    /// **Verwendete Joints:**
+    /// - `.root` (VNHumanBodyPoseObservation.JointName.root) - Unterer Rücken/Hüftmitte
+    /// - `.neck` (VNHumanBodyPoseObservation.JointName.neck) - Nacken/Oberkörper-Anfang
+    ///
+    /// **Berechnung:**
+    /// - Vektor: root → neck = Oberkörper-Achse
+    /// - Vergleich mit Vertikale (Schwerkraft-Achse)
+    /// - 0° = perfekt aufrecht
+    /// - +30° = leicht nach vorne gebeugt
+    /// - -15° = leicht nach hinten gelehnt
+    private func calculateTorsoAngle(observation: VNHumanBodyPoseObservation) -> Double? {
+        do {
+            // Hole unterer Rücken (root) und Nacken (neck)
+            let root = try observation.recognizedPoint(.root)
+            let neck = try observation.recognizedPoint(.neck)
+
+            // Prüfe Confidence (mindestens 0.2 für Testing - niedrige Schwelle)
+            guard root.confidence > 0.2 && neck.confidence > 0.2 else {
+                return nil
+            }
+
+            // Vektor: root → neck (Oberkörper-Achse)
+            // Vision Koordinaten: (0,0) = unten links, (1,1) = oben rechts
+            let dx = neck.location.x - root.location.x  // Horizontal (positiv = nach rechts)
+            let dy = neck.location.y - root.location.y  // Vertikal (positiv = nach oben)
+
+            // Prüfe auf minimale Bewegung
+            guard abs(dx) > 0.001 || abs(dy) > 0.001 else {
+                return nil
+            }
+
+            // Berechne Winkel zur Vertikalen mit atan2
+            // atan2(dx, dy) gibt uns den Winkel des Oberkörpers zur Vertikalen
+            //
+            // WICHTIG: Vision orientation = .right bedeutet:
+            // - Standing straight: neck ist "rechts" von root in Vision coords → dx groß, dy klein → ~90°
+            // - Forward bend: dx wird kleiner → angle geht gegen 0°
+            // - Backward lean: dx wird größer → angle geht über 90°
+            //
+            // Für Hammerwurf Konvention (benutzerfreundlich):
+            // - 0° = perfekt aufrecht stehen
+            // - Positiv = nach VORNE gebeugt (z.B. +30°)
+            // - Negativ = nach HINTEN gelehnt (z.B. -15°)
+            //
+            // Umrechnung: adjustedAngle = 90° - rawAngle
+            let angleRadians = atan2(dx, dy)
+            let rawAngleDegrees = angleRadians * 180.0 / .pi
+
+            // Konvertiere: 90° (straight) → 0°, <90° (forward) → positive, >90° (backward) → negative
+            let adjustedAngle = 90.0 - rawAngleDegrees
+
+            return adjustedAngle
+
+        } catch {
+            return nil
+        }
+    }
+
     private func startTrackingHammer() {
         self.isActivelyTracking = true
         // isDetectingPose bleibt true (verhindert weitere Trigger während Tracking)
@@ -591,8 +690,62 @@ class CameraManager: NSObject, ObservableObject {
             // Setze KEIN Preset - wir wählen das Format direkt!
             // Preset limitations können 60 FPS blockieren
             print("🔍 Searching for 1080p 60 FPS camera format...")
-            
-            // Configure camera input
+
+            // 📷 ADAPTIVE KAMERA-ERKENNUNG - Erkenne ALLE verfügbaren Kameras
+            // Unterstützt: Ultra Wide (0.5x), Wide (1x), Telephoto (2x), Triple Camera, Dual Camera, etc.
+            print("🔍 Erkenne verfügbare Kameras adaptiv...")
+
+            let discoverySession = AVCaptureDevice.DiscoverySession(
+                deviceTypes: [
+                    .builtInUltraWideCamera,      // 0.5x (iPhone 11+)
+                    .builtInWideAngleCamera,      // 1.0x (Standard)
+                    .builtInTelephotoCamera,      // 2x-3x (iPhone 7 Plus+)
+                    .builtInDualCamera,           // Dual-System (Wide + Telephoto)
+                    .builtInTripleCamera,         // Triple-System (Ultra Wide + Wide + Telephoto)
+                    .builtInDualWideCamera        // Dual Wide (Ultra Wide + Wide)
+                ],
+                mediaType: .video,
+                position: .back
+            )
+
+            // Sammle alle verfügbaren Kameras und ordne sie ihrem nativen Zoom-Faktor zu
+            for device in discoverySession.devices {
+                let deviceName: String
+                let nativeZoom: CGFloat
+
+                switch device.deviceType {
+                case .builtInUltraWideCamera:
+                    deviceName = "Ultra Wide"
+                    nativeZoom = 0.5
+                case .builtInWideAngleCamera:
+                    deviceName = "Wide Angle"
+                    nativeZoom = 1.0
+                case .builtInTelephotoCamera:
+                    deviceName = "Telephoto"
+                    nativeZoom = 2.0  // Kann auch 3x sein, wird durch Format-Check verfeinert
+                case .builtInDualCamera:
+                    deviceName = "Dual Camera"
+                    nativeZoom = 1.0  // Hauptkamera
+                case .builtInTripleCamera:
+                    deviceName = "Triple Camera"
+                    nativeZoom = 1.0  // Hauptkamera
+                case .builtInDualWideCamera:
+                    deviceName = "Dual Wide"
+                    nativeZoom = 1.0
+                default:
+                    deviceName = "Unknown"
+                    nativeZoom = 1.0
+                }
+
+                self.availableCameras[nativeZoom] = device
+                print("✅ \(deviceName) gefunden (native Zoom: \(String(format: "%.1fx", nativeZoom)))")
+            }
+
+            // Sortiere Zoom-Faktoren für UI
+            self.cameraZoomFactors = Array(self.availableCameras.keys).sorted()
+            print("📷 Verfügbare Kamera-Zoom-Faktoren: \(self.cameraZoomFactors.map { String(format: "%.1fx", $0) }.joined(separator: ", "))")
+
+            // Configure camera input (Standard: Wide Angle)
             if let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) {
                 do {
                     let input = try AVCaptureDeviceInput(device: camera)
@@ -858,37 +1011,208 @@ class CameraManager: NSObject, ObservableObject {
     }
     
     func setZoomFactor(_ factor: CGFloat) {
+        // 📷 ADAPTIVE KAMERA-SWITCHING
+        // Prüfe ob es eine native Kamera für diesen Zoom-Faktor gibt
+        if let targetCamera = availableCameras[factor] {
+            // Wechsle zur nativen Kamera für diesen Zoom-Faktor
+            switchToCamera(targetCamera, nativeZoom: factor)
+            return
+        }
+
+        // Kein natives Kamera-Device → Nutze digitalen Zoom auf aktueller Kamera
+        applyZoomToCurrentCamera(factor)
+    }
+
+    private func applyZoomToCurrentCamera(_ factor: CGFloat) {
         guard let device = currentCamera else { return }
-        
+
         do {
             try device.lockForConfiguration()
-            
-            let clampedFactor = max(device.minAvailableVideoZoomFactor, 
+
+            let clampedFactor = max(device.minAvailableVideoZoomFactor,
                                    min(factor, device.maxAvailableVideoZoomFactor))
-            
+
             device.videoZoomFactor = clampedFactor
             currentZoomFactor = factor
             device.unlockForConfiguration()
+
+            print("📷 Zoom gesetzt: \(String(format: "%.1fx", clampedFactor))")
         } catch {
-            print("Error setting zoom: \(error)")
+            print("❌ Error setting zoom: \(error)")
+        }
+    }
+
+    /// Wechselt zur angegebenen Kamera (adaptiv für alle Kameratypen)
+    private func switchToCamera(_ targetCamera: AVCaptureDevice, nativeZoom: CGFloat) {
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+
+            // Prüfe ob wir schon auf dieser Kamera sind
+            if self.currentCamera == targetCamera {
+                print("📷 Bereits auf gewünschter Kamera (\(String(format: "%.1fx", nativeZoom)))")
+                DispatchQueue.main.async {
+                    self.currentZoomFactor = nativeZoom
+                }
+                return
+            }
+
+            self.session.beginConfiguration()
+
+            // Entferne aktuellen Input
+            if let input = self.videoDeviceInput {
+                self.session.removeInput(input)
+            }
+
+            do {
+                // 🔥 KRITISCH: Konfiguriere Kamera VOR dem Hinzufügen zur Session!
+                // Dies verhindert den -17281 Fehler
+                try targetCamera.lockForConfiguration()
+
+                    // Suche 1080p 60 FPS Format für diese Kamera
+                    var formatFound = false
+                    var selectedFormat: AVCaptureDevice.Format?
+
+                    for format in targetCamera.formats {
+                        let description = format.formatDescription
+                        let dimensions = CMVideoFormatDescriptionGetDimensions(description)
+
+                        // Suche 1920x1080 Format
+                        if dimensions.width == 1920 && dimensions.height == 1080 {
+                            // Prüfe ob dieses Format 60 FPS unterstützt
+                            for range in format.videoSupportedFrameRateRanges {
+                                if range.maxFrameRate >= 60.0 {
+                                    selectedFormat = format
+                                    formatFound = true
+                                    print("✅ Found 1080p 60 FPS format for new camera: \(dimensions.width)x\(dimensions.height) @ \(range.maxFrameRate) FPS")
+                                    break
+                                }
+                            }
+                            if formatFound { break }
+                        }
+                    }
+
+                    // Setze das gefundene Format oder Fallback zu 720p
+                    if let format = selectedFormat {
+                        targetCamera.activeFormat = format
+                    } else {
+                        print("⚠️ No 1080p 60 FPS format found for new camera, trying 720p...")
+                        // Fallback: Versuche 720p 60 FPS
+                        for format in targetCamera.formats {
+                            let description = format.formatDescription
+                            let dimensions = CMVideoFormatDescriptionGetDimensions(description)
+
+                            if dimensions.width == 1280 && dimensions.height == 720 {
+                                for range in format.videoSupportedFrameRateRanges {
+                                    if range.maxFrameRate >= 60.0 {
+                                        targetCamera.activeFormat = format
+                                        print("✅ Fallback: Set to 720p 60 FPS")
+                                        formatFound = true
+                                        break
+                                    }
+                                }
+                                if formatFound { break }
+                            }
+                        }
+                    }
+
+                    // Setze Frame Rate auf 60 FPS
+                    if let activeFormat = targetCamera.activeFormat.videoSupportedFrameRateRanges.first {
+                        let maxFrameRate = activeFormat.maxFrameRate
+
+                        if maxFrameRate >= 60.0 {
+                            targetCamera.activeVideoMinFrameDuration = CMTime(value: 1, timescale: 60)
+                            targetCamera.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: 60)
+                            print("✅ Frame rate set to 60 FPS on new camera")
+                        } else {
+                            let targetFPS = Int32(maxFrameRate)
+                            targetCamera.activeVideoMinFrameDuration = CMTime(value: 1, timescale: targetFPS)
+                            targetCamera.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: targetFPS)
+                            print("⚠️ Frame rate set to \(targetFPS) FPS (device maximum)")
+                        }
+                    }
+
+                    // Auto-focus konfigurieren
+                    if targetCamera.isFocusModeSupported(.continuousAutoFocus) {
+                        targetCamera.focusMode = .continuousAutoFocus
+                    }
+
+                    // Auto-exposure konfigurieren
+                    if targetCamera.isExposureModeSupported(.continuousAutoExposure) {
+                        targetCamera.exposureMode = .continuousAutoExposure
+                    }
+
+                targetCamera.unlockForConfiguration()
+
+                // JETZT ist die Kamera konfiguriert → füge sie zur Session hinzu
+                let newInput = try AVCaptureDeviceInput(device: targetCamera)
+                if self.session.canAddInput(newInput) {
+                    self.session.addInput(newInput)
+                    self.videoDeviceInput = newInput
+                    self.currentCamera = targetCamera
+
+                    // Video Connection neu konfigurieren
+                    if let connection = self.videoDataOutput.connection(with: .video) {
+                        connection.isEnabled = true
+
+                        if #available(iOS 17.0, *) {
+                            if connection.isVideoRotationAngleSupported(90) {
+                                connection.videoRotationAngle = 90
+                            }
+                        } else {
+                            if connection.isVideoOrientationSupported {
+                                connection.videoOrientation = .portrait
+                            }
+                        }
+
+                        connection.isEnabled = true
+                    }
+
+                    // Kamera-Typ Name für Logging
+                    let cameraName: String
+                    switch targetCamera.deviceType {
+                    case .builtInUltraWideCamera: cameraName = "Ultra Wide"
+                    case .builtInWideAngleCamera: cameraName = "Wide Angle"
+                    case .builtInTelephotoCamera: cameraName = "Telephoto"
+                    case .builtInDualCamera: cameraName = "Dual Camera"
+                    case .builtInTripleCamera: cameraName = "Triple Camera"
+                    case .builtInDualWideCamera: cameraName = "Dual Wide"
+                    default: cameraName = "Unknown"
+                    }
+
+                    DispatchQueue.main.async {
+                        self.currentZoomFactor = nativeZoom
+                        print("📷 ✅ Gewechselt zu \(cameraName) (\(String(format: "%.1fx", nativeZoom))) - Format optimiert")
+                    }
+                }
+            } catch {
+                print("❌ Error switching camera: \(error)")
+            }
+
+            self.session.commitConfiguration()
         }
     }
     
     private func updateAvailableZoomFactors() {
-        guard let device = currentCamera else { return }
-        
-        var factors: [CGFloat] = [1.0]
-        
-        if device.maxAvailableVideoZoomFactor >= 2.0 {
-            factors.append(2.0)
+        // 📷 ADAPTIVE ZOOM-FAKTOREN basierend auf erkannten Kameras
+        var factors: [CGFloat] = []
+
+        // Füge alle nativen Kamera-Zoom-Faktoren hinzu (aus Discovery Session)
+        factors.append(contentsOf: cameraZoomFactors)
+
+        // Optional: Füge zusätzliche digitale Zoom-Faktoren hinzu (z.B. 3x wenn Gerät es unterstützt)
+        if let device = currentCamera {
+            // Füge 3x hinzu wenn möglich (digital zoom auf aktueller Kamera)
+            if device.maxAvailableVideoZoomFactor >= 3.0 && !factors.contains(3.0) {
+                factors.append(3.0)
+            }
         }
-        
-        if device.maxAvailableVideoZoomFactor >= 3.0 {
-            factors.append(3.0)
-        }
-        
+
+        // Sortiere Faktoren aufsteigend
+        factors.sort()
+
         DispatchQueue.main.async {
             self.availableZoomFactors = factors
+            print("📷 Verfügbare Zoom-Faktoren (adaptiv): \(factors.map { String(format: "%.1fx", $0) }.joined(separator: ", "))")
         }
     }
     
@@ -966,17 +1290,35 @@ class CameraManager: NSObject, ObservableObject {
     }
     
     private func formatAnalysisResults(_ analysis: TrajectoryAnalysis) -> String {
-        var results = "Trajektorien-Analyse:\n\n"
-        
+        var results = ""
+
         for (index, ellipse) in analysis.ellipses.enumerated() {
             let direction = ellipse.angle > 0 ? "rechts" : "links"
             let absAngle = abs(ellipse.angle)
-            results += "Ellipse \(index + 1): \(String(format: "%.1f", absAngle)) Grad nach \(direction)\n"
+            results += "Drehung \(index + 1) \(String(format: "%.0f", absAngle)) grad nach \(direction). "
+
+            // 🎯 Füge Oberkörper-Winkel am Umkehrpunkt 1 (2. Punkt) hinzu
+            if let torsoAngle = ellipse.torsoAngleAtSecondPoint {
+                let torsoDirection: String
+                let absTorsoAngle = abs(torsoAngle)
+
+                if torsoAngle > 5 {
+                    torsoDirection = "nach vorne"
+                } else if torsoAngle < -5 {
+                    torsoDirection = "nach hinten"
+                } else {
+                    torsoDirection = "aufrecht"  // Zwischen -5° und +5° = aufrecht
+                }
+
+                if absTorsoAngle > 5 {
+                    results += "Oberkörper \(String(format: "%.0f", absTorsoAngle)) grad \(torsoDirection). "
+                } else {
+                    results += "Oberkörper \(torsoDirection). "
+                }
+            }
         }
-        
-        results += "\nDurchschnitt: \(String(format: "%.1f", abs(analysis.averageAngle))) Grad"
-        
-        return results
+
+        return results.trimmingCharacters(in: .whitespaces)
     }
     
     private func speakResults(_ text: String, startTime: Date) {
@@ -1011,7 +1353,39 @@ class CameraManager: NSObject, ObservableObject {
     }
     
     func toggleFlash() {
-        flashMode = flashMode == .off ? .on : .off
+        guard let device = currentCamera else { return }
+
+        // Prüfe ob Taschenlampe verfügbar ist
+        guard device.hasTorch && device.isTorchAvailable else {
+            print("⚠️ Taschenlampe nicht verfügbar auf dieser Kamera")
+            return
+        }
+
+        do {
+            try device.lockForConfiguration()
+
+            if device.torchMode == .off {
+                // Taschenlampe einschalten
+                if device.isTorchModeSupported(.on) {
+                    try device.setTorchModeOn(level: 1.0)  // Volle Helligkeit
+                    DispatchQueue.main.async {
+                        self.isTorchOn = true
+                        print("🔦 Taschenlampe EIN")
+                    }
+                }
+            } else {
+                // Taschenlampe ausschalten
+                device.torchMode = .off
+                DispatchQueue.main.async {
+                    self.isTorchOn = false
+                    print("🔦 Taschenlampe AUS")
+                }
+            }
+
+            device.unlockForConfiguration()
+        } catch {
+            print("❌ Fehler beim Umschalten der Taschenlampe: \(error)")
+        }
     }
     
     func switchCamera() {
@@ -1210,12 +1584,13 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         // Hammer Tracking für Analyse (nur wenn aktiv)
         if isAnalyzing {
             let currentFrameCount = frameCount
+            let currentTorso = currentTorsoAngle  // Capture torso angle für Frame
 
             hammerTrackingQueue.async { [weak self] in
                 guard let self = self else { return }
 
-                // Process frame for tracking
-                self.hammerTracker?.processLiveFrame(pixelBuffer, frameNumber: currentFrameCount)
+                // Process frame for tracking with torso angle
+                self.hammerTracker?.processLiveFrame(pixelBuffer, frameNumber: currentFrameCount, torsoAngle: currentTorso)
             }
         }
     }
@@ -1490,6 +1865,57 @@ struct FocusIndicatorView: View {
     }
 }
 
+// 🧪 Torso Angle Display View
+struct TorsoAngleView: View {
+    let angle: Double
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Text("Oberkörper-Neigung")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.white.opacity(0.8))
+
+            HStack(spacing: 6) {
+                // Icon basierend auf Richtung
+                Image(systemName: angle > 0 ? "arrow.forward" : "arrow.backward")
+                    .font(.system(size: 14))
+                    .foregroundColor(angle > 0 ? LiquidGlassColors.accent : LiquidGlassColors.primary)
+
+                // Winkel-Wert
+                Text(String(format: "%.1f°", abs(angle)))
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(.white)
+
+                // Richtung
+                Text(angle > 0 ? "VORNE" : "HINTEN")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(angle > 0 ? LiquidGlassColors.accent : LiquidGlassColors.primary)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.black.opacity(0.6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.4),
+                                    Color.white.opacity(0.15)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1
+                        )
+                )
+                .shadow(color: (angle > 0 ? LiquidGlassColors.accent : LiquidGlassColors.primary).opacity(0.3), radius: 10, x: 0, y: 4)
+        )
+    }
+}
+
 // Camera Controls View - Kompakte einzeilige Version
 struct CameraControlsView: View {
     @ObservedObject var cameraManager: CameraManager
@@ -1554,9 +1980,9 @@ struct CameraControlsView: View {
     }
 
     private var flashButton: some View {
-        let isFlashOn = cameraManager.flashMode == .on
-        let iconName = isFlashOn ? "bolt.fill" : "bolt.slash.fill"
-        let bgColor = isFlashOn ? LiquidGlassColors.primary : Color.white.opacity(0.1)
+        let isTorchOn = cameraManager.isTorchOn
+        let iconName = isTorchOn ? "flashlight.on.fill" : "flashlight.off.fill"
+        let bgColor = isTorchOn ? LiquidGlassColors.primary : Color.white.opacity(0.1)
 
         return Button(action: {
             cameraManager.toggleFlash()

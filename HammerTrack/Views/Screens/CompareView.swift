@@ -93,6 +93,7 @@ struct CompareView: View {
                             }
                         }
                         .frame(maxHeight: .infinity)
+                        .ignoresSafeArea(edges: .top)  // Nutze vollen Bereich bis zur Dynamic Island
                     }
 
                     // Video Player 2 (Bottom Half) - Fullscreen
@@ -139,6 +140,7 @@ struct CompareView: View {
                             }
                         }
                         .frame(maxHeight: .infinity)
+                        .ignoresSafeArea(edges: .bottom)  // Nutze vollen Bereich bis zum unteren Bildschirmrand
                     }
                 }
                 .ignoresSafeArea()
@@ -253,57 +255,163 @@ struct CompareView: View {
 
                 // Video Player 1 Timeline - Liquid Glass Style
                 if selectedVideoURLs.count == 2 {
-                    VStack(spacing: 4) {
-                        // Timeline - dünner Slider
-                        Slider(
-                            value: Binding(
-                                get: { currentTime1 },
-                                set: { newValue in
-                                    currentTime1 = newValue
-                                    let cmTime = CMTime(seconds: newValue, preferredTimescale: 1000)
-                                    player1?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero)
+                    ZStack(alignment: .top) {
+                        VStack(spacing: 4) {
+                            // Timeline - dünner Slider
+                            Slider(
+                                value: Binding(
+                                    get: { currentTime1 },
+                                    set: { newValue in
+                                        currentTime1 = newValue
+                                        let cmTime = CMTime(seconds: newValue, preferredTimescale: 1000)
+                                        player1?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero)
 
-                                    // When synchronized, maintain the time offset
-                                    if isSynchronized {
-                                        let syncTime = newValue + timeOffset
-                                        let clampedSyncTime = max(0, min(syncTime, duration2))
-                                        player2?.seek(to: CMTime(seconds: clampedSyncTime, preferredTimescale: 1000), toleranceBefore: .zero, toleranceAfter: .zero)
-                                        currentTime2 = clampedSyncTime
+                                        // When synchronized, maintain the time offset
+                                        if isSynchronized {
+                                            let syncTime = newValue + timeOffset
+                                            let clampedSyncTime = max(0, min(syncTime, duration2))
+                                            player2?.seek(to: CMTime(seconds: clampedSyncTime, preferredTimescale: 1000), toleranceBefore: .zero, toleranceAfter: .zero)
+                                            currentTime2 = clampedSyncTime
+                                        }
                                     }
-                                }
-                            ),
-                            in: 0...max(duration1, 1)
+                                ),
+                                in: 0...max(duration1, 1)
+                            )
+                            .tint(LiquidGlassColors.accent)
+                            .frame(height: 8)
+
+                            // Time labels - jede Hälfte zentriert
+                            HStack(spacing: 0) {
+                                // Linke Hälfte: currentTime zentriert
+                                Text(formatTime(currentTime1))
+                                    .font(.system(size: 9, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.8))
+                                    .frame(maxWidth: .infinity, alignment: .center)
+
+                                // Rechte Hälfte: duration zentriert
+                                Text(formatTime(duration1))
+                                    .font(.system(size: 9, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.8))
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                            }
+                        }
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 16)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(Color.white.opacity(0.10))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .stroke(
+                                            LinearGradient(
+                                                colors: [
+                                                    Color.white.opacity(0.25),
+                                                    Color.white.opacity(0.08)
+                                                ],
+                                                startPoint: .topLeading,
+                                                endPoint: .bottomTrailing
+                                            ),
+                                            lineWidth: 1
+                                        )
+                                )
+                                .shadow(color: Color.white.opacity(0.08), radius: 6, x: 0, y: 3)
                         )
-                        .tint(LiquidGlassColors.accent)
-                        .frame(height: 8)
+                        .frame(maxWidth: 500)
+                        .padding(.horizontal, 20)
+                        .offset(y: -15)
 
-                        // Time labels - jede Hälfte zentriert
-                        HStack(spacing: 0) {
-                            // Linke Hälfte: currentTime zentriert
-                            Text(formatTime(currentTime1))
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundColor(.white.opacity(0.8))
-                                .frame(maxWidth: .infinity, alignment: .center)
+                        // Info-Box für oberen Player (Player 1) - schwebt über Timeline (gleicher Abstand wie unten)
+                        if isSynchronized && ellipseViewMode,
+                           let selectedIndex = selectedEllipseIndex,
+                           let analysis1 = hammerTracker1.analysisResult,
+                           selectedIndex < analysis1.ellipses.count {
+                            let ellipse1 = analysis1.ellipses[selectedIndex]
+                            VStack(spacing: 1) {
+                                Text("Ellipse \(selectedIndex + 1)")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.white.opacity(0.8))
 
-                            // Rechte Hälfte: duration zentriert
-                            Text(formatTime(duration1))
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundColor(.white.opacity(0.8))
-                                .frame(maxWidth: .infinity, alignment: .center)
+                                HStack(spacing: 3) {
+                                    Image(systemName: ellipse1.angle > 0 ? "arrow.up.right" : "arrow.up.left")
+                                        .font(.system(size: 9))
+                                        .foregroundColor(ellipse1.angle > 0 ? LiquidGlassColors.accent : LiquidGlassColors.primary)
+
+                                    Text(String(format: "%.1f°", abs(ellipse1.angle)))
+                                        .font(.system(size: 10, weight: .medium))
+                                        .foregroundColor(.white)
+
+                                    Text(ellipse1.angle > 0 ? "rechts" : "links")
+                                        .font(.system(size: 9))
+                                        .foregroundColor(ellipse1.angle > 0 ? LiquidGlassColors.accent : LiquidGlassColors.primary)
+                                }
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(Color.white.opacity(0.15))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .stroke(
+                                                LinearGradient(
+                                                    colors: [
+                                                        Color.white.opacity(0.4),
+                                                        Color.white.opacity(0.15)
+                                                    ],
+                                                    startPoint: .topLeading,
+                                                    endPoint: .bottomTrailing
+                                                ),
+                                                lineWidth: 1
+                                            )
+                                    )
+                                    .shadow(color: LiquidGlassColors.accent.opacity(0.2), radius: 8, x: 0, y: 2)
+                            )
+                            .offset(y: -50)
                         }
                     }
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 16)
+                }
+
+                Spacer()
+
+                // Info-Box für unteren Player (Player 2) - an der oberen Kante der Control-Bar
+                if selectedVideoURLs.count == 2,
+                   isSynchronized && ellipseViewMode,
+                   let selectedIndex = selectedEllipseIndex,
+                   let analysis2 = hammerTracker2.analysisResult,
+                   selectedIndex < analysis2.ellipses.count {
+                    let ellipse2 = analysis2.ellipses[selectedIndex]
+
+                    VStack(spacing: 1) {
+                        Text("Ellipse \(selectedIndex + 1)")
+                            .font(.system(size: 9))
+                            .foregroundColor(.white.opacity(0.8))
+
+                        HStack(spacing: 3) {
+                            Image(systemName: ellipse2.angle > 0 ? "arrow.up.right" : "arrow.up.left")
+                                .font(.system(size: 9))
+                                .foregroundColor(ellipse2.angle > 0 ? LiquidGlassColors.accent : LiquidGlassColors.primary)
+
+                            Text(String(format: "%.1f°", abs(ellipse2.angle)))
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(.white)
+
+                            Text(ellipse2.angle > 0 ? "rechts" : "links")
+                                .font(.system(size: 9))
+                                .foregroundColor(ellipse2.angle > 0 ? LiquidGlassColors.accent : LiquidGlassColors.primary)
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
                     .background(
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(Color.white.opacity(0.10))
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.white.opacity(0.15))
                             .overlay(
-                                RoundedRectangle(cornerRadius: 10)
+                                RoundedRectangle(cornerRadius: 8)
                                     .stroke(
                                         LinearGradient(
                                             colors: [
-                                                Color.white.opacity(0.25),
-                                                Color.white.opacity(0.08)
+                                                Color.white.opacity(0.4),
+                                                Color.white.opacity(0.15)
                                             ],
                                             startPoint: .topLeading,
                                             endPoint: .bottomTrailing
@@ -311,14 +419,13 @@ struct CompareView: View {
                                         lineWidth: 1
                                     )
                             )
-                            .shadow(color: Color.white.opacity(0.08), radius: 6, x: 0, y: 3)
+                            .shadow(color: LiquidGlassColors.accent.opacity(0.2), radius: 8, x: 0, y: 2)
                     )
                     .frame(maxWidth: 500)
                     .padding(.horizontal, 20)
-                    .offset(y: -15)
+                    .padding(.bottom, 4)
+                    .allowsHitTesting(false)
                 }
-
-                Spacer()
 
                 // Video Player 2 Controls (am unteren Ende von Video 2)
                 if selectedVideoURLs.count == 2, let player1 = player1, let player2 = player2 {
@@ -332,7 +439,8 @@ struct CompareView: View {
                         totalEllipses: totalEllipses2,
                         selectedEllipseIndex: $selectedEllipseIndex,
                         ellipseViewMode: $ellipseViewMode,
-                        analysisResult: hammerTracker2.analysisResult,
+                        analysisResult1: hammerTracker1.analysisResult,
+                        analysisResult2: hammerTracker2.analysisResult,
                         isSynchronized: isSynchronized,
                         isPlayer2: true,
                         otherPlayer: player1,
@@ -377,39 +485,65 @@ struct CompareView: View {
         }
         .onChange(of: selectedVideoURLs) { _, urls in
             if urls.count == 2 {
+                // Reset analysis state
+                hammerTracker1.currentTrajectory = nil
+                hammerTracker1.analysisResult = nil
+                hammerTracker2.currentTrajectory = nil
+                hammerTracker2.analysisResult = nil
+
+                // Reset playback state
+                currentTime1 = 0
+                currentTime2 = 0
+                isPlaying = false
+                isSynchronized = false
+                ellipseViewMode = false
+                selectedEllipseIndex = nil
+
                 setupPlayers(with: urls)
                 processVideos(urls: urls)
             }
         }
         .onChange(of: isPlaying) { _, playing in
             if playing {
-                // Apply playback speeds when starting
-                player1?.rate = playbackSpeed1
-                player2?.rate = playbackSpeed2
+                // Apply playback speeds when starting (don't reset them!)
                 player1?.play()
                 player2?.play()
+                player1?.rate = playbackSpeed1
+                player2?.rate = playbackSpeed2
             } else {
                 player1?.pause()
                 player2?.pause()
             }
         }
         .onChange(of: playbackSpeed1) { _, newSpeed in
-            // Update player 1 rate if playing
+            // Update speed ONLY if currently playing (don't auto-start!)
             if isPlaying {
                 player1?.rate = newSpeed
+                print("⚡ Video 1 speed changed to \(newSpeed)x while playing")
+            } else {
+                print("⚡ Video 1 speed stored as \(newSpeed)x (will apply on play)")
             }
         }
         .onChange(of: playbackSpeed2) { _, newSpeed in
-            // Update player 2 rate if playing
+            // Update speed ONLY if currently playing (don't auto-start!)
             if isPlaying {
                 player2?.rate = newSpeed
+                print("⚡ Video 2 speed changed to \(newSpeed)x while playing")
+            } else {
+                print("⚡ Video 2 speed stored as \(newSpeed)x (will apply on play)")
             }
+        }
+        .onAppear {
+            // Reset playback speeds to 1.0x when view appears
+            playbackSpeed1 = 1.0
+            playbackSpeed2 = 1.0
+            print("🔄 CompareView appeared - playback speeds reset to 1.0x")
         }
         .onDisappear {
             // Reset playback speeds when leaving the view
             playbackSpeed1 = 1.0
             playbackSpeed2 = 1.0
-            print("🔄 Compare View dismissed - playback speeds reset to 1.0x")
+            print("🔄 CompareView dismissed - playback speeds reset to 1.0x")
         }
     }
 
@@ -759,13 +893,33 @@ struct CompareView: View {
     private func addTimeObservers() {
         let interval = CMTime(seconds: 0.001, preferredTimescale: 1000)
 
-        player1?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
+        player1?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [self] time in
             currentTime1 = time.seconds
+
+            // Check if video 1 reached the end
+            if currentTime1 >= duration1 - 0.1 && isPlaying {
+                DispatchQueue.main.async {
+                    player1?.seek(to: .zero)
+                    isPlaying = false
+                    print("🔄 Video 1 ended - showing Play button")
+                }
+            }
+
             updateCurrentEllipseAngle()
         }
 
-        player2?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
+        player2?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [self] time in
             currentTime2 = time.seconds
+
+            // Check if video 2 reached the end
+            if currentTime2 >= duration2 - 0.1 && isPlaying {
+                DispatchQueue.main.async {
+                    player2?.seek(to: .zero)
+                    isPlaying = false
+                    print("🔄 Video 2 ended - showing Play button")
+                }
+            }
+
             updateCurrentEllipseAngle()
         }
     }
@@ -894,7 +1048,8 @@ struct CompareVideoControls: View {
     let totalEllipses: Int
     @Binding var selectedEllipseIndex: Int?
     @Binding var ellipseViewMode: Bool
-    let analysisResult: TrajectoryAnalysis?
+    let analysisResult1: TrajectoryAnalysis?  // Oberer Player (Player 1)
+    let analysisResult2: TrajectoryAnalysis?  // Unterer Player (Player 2)
 
     // Compare-specific properties
     let isSynchronized: Bool
@@ -916,197 +1071,144 @@ struct CompareVideoControls: View {
     @State private var isDraggingSlider = false
 
     var body: some View {
-        ZStack(alignment: .top) {
-            // Main player controls
-            VStack(spacing: 6) {
-                // Timeline - dünner
-                Slider(
-                    value: Binding(
-                        get: { currentTime },
-                        set: { newValue in
-                            currentTime = newValue
-                            if isDraggingSlider {
-                                seekWithSync(to: newValue)
-                            }
-                        }
-                    ),
-                    in: 0...max(duration, 1)
-                ) { editing in
-                    isDraggingSlider = editing
-                    if !editing {
-                        seekWithSync(to: currentTime)
-                    }
-                }
-                .tint(LiquidGlassColors.accent)
-                .frame(height: 16)
-
-                // Time labels
-                HStack {
-                    Text(formatTime(currentTime))
-                        .font(.caption2)
-                        .foregroundColor(.white.opacity(0.8))
-
-                    Spacer()
-
-                    Text(formatTime(duration))
-                        .font(.caption2)
-                        .foregroundColor(.white.opacity(0.8))
-                }
-
-                // Fixed control buttons on one line - immer vollständig sichtbar
-                HStack(spacing: 15) {
-                    // Sync button (nur bei Player 2)
-                    if isPlayer2 {
-                        Button(action: onSyncToggle) {
-                            Image(systemName: isSynchronized ? "link" : "link.badge.plus")
-                                .font(.system(size: 16))
-                                .foregroundColor(isSynchronized ? LiquidGlassColors.accent : .white.opacity(0.7))
-                                .frame(width: 36, height: 36)
+        // Main player controls (Info-Box wurde nach außen verschoben)
+        VStack(spacing: 6) {
+            // Timeline - dünner
+            Slider(
+                value: Binding(
+                    get: { currentTime },
+                    set: { newValue in
+                        currentTime = newValue
+                        if isDraggingSlider {
+                            seekWithSync(to: newValue)
                         }
                     }
+                ),
+                in: 0...max(duration, 1)
+            ) { editing in
+                isDraggingSlider = editing
+                if !editing {
+                    seekWithSync(to: currentTime)
+                }
+            }
+            .tint(LiquidGlassColors.accent)
+            .frame(height: 16)
 
-                    // Ellipse backward - immer sichtbar
-                    Button(action: onPreviousEllipse) {
-                        Image(systemName: "chevron.left.2")
-                            .font(.title3)
-                            .foregroundColor(canGoPreviousEllipse() ? .white : .white.opacity(0.3))
-                            .frame(width: 38, height: 50)
-                    }
-                    .disabled(!canGoPreviousEllipse())
+            // Time labels
+            HStack {
+                Text(formatTime(currentTime))
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.8))
 
-                    // Frame backward
-                    Button(action: {
-                        onFrameStep(false)
-                    }) {
-                        Image(systemName: "backward.frame")
-                            .font(.title3)
-                            .foregroundColor(.white)
-                            .frame(width: 44, height: 50)
-                    }
+                Spacer()
 
-                    // Play/Pause button
-                    Button(action: {
-                        isPlaying.toggle()
-                    }) {
-                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                            .frame(width: 50, height: 50)
-                            .background(
-                                Circle()
-                                    .fill(LiquidGlassColors.primary)
-                            )
-                            .overlay(
-                                Circle()
-                                    .stroke(LiquidGlassColors.glassBorder, lineWidth: 1.5)
-                            )
-                            .shadow(color: LiquidGlassColors.primary.opacity(0.3), radius: 8, x: 0, y: 4)
-                    }
+                Text(formatTime(duration))
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.8))
+            }
 
-                    // Frame forward
-                    Button(action: {
-                        onFrameStep(true)
-                    }) {
-                        Image(systemName: "forward.frame")
-                            .font(.title3)
-                            .foregroundColor(.white)
-                            .frame(width: 44, height: 50)
-                    }
-
-                    // Ellipse forward - immer sichtbar
-                    Button(action: onNextEllipse) {
-                        Image(systemName: "chevron.right.2")
-                            .font(.title3)
-                            .foregroundColor(canGoNextEllipse() ? .white : .white.opacity(0.3))
-                            .frame(width: 38, height: 50)
-                    }
-                    .disabled(!canGoNextEllipse())
-
-                    // Trajectory toggle (ganz rechts)
-                    Button(action: {
-                        showTrajectory.toggle()
-                    }) {
-                        Image(systemName: showTrajectory ? "eye" : "eye.slash")
+            // Fixed control buttons on one line - immer vollständig sichtbar
+            HStack(spacing: 15) {
+                // Sync button (nur bei Player 2)
+                if isPlayer2 {
+                    Button(action: onSyncToggle) {
+                        Image(systemName: isSynchronized ? "link" : "link.badge.plus")
                             .font(.system(size: 16))
-                            .foregroundColor(showTrajectory ? LiquidGlassColors.accent : .white.opacity(0.7))
+                            .foregroundColor(isSynchronized ? LiquidGlassColors.accent : .white.opacity(0.7))
                             .frame(width: 36, height: 36)
                     }
                 }
-                .frame(height: 50)
-            }
-            .padding(.vertical, 8)
-            .padding(.horizontal, 16)
-            .background(
-                RoundedRectangle(cornerRadius: 18)
-                    .fill(Color.white.opacity(0.12))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18)
-                            .stroke(
-                                LinearGradient(
-                                    colors: [
-                                        Color.white.opacity(0.3),
-                                        Color.white.opacity(0.1)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ),
-                                lineWidth: 1.5
-                            )
-                    )
-                    .shadow(color: Color.white.opacity(0.12), radius: 10, x: 0, y: 5)
-            )
 
-            // Ellipse info overlay - floats above controls without shifting them
-            if isSynchronized && ellipseViewMode,
-               let selectedIndex = selectedEllipseIndex,
-               let analysis = analysisResult,
-               selectedIndex < analysis.ellipses.count {
-                // Ellipsen-Modus: Zeige ausgewählte Ellipse
-                let ellipse = analysis.ellipses[selectedIndex]
-                VStack(spacing: 2) {
-                    Text("Ellipse \(selectedIndex + 1)/\(totalEllipses)")
-                        .font(.caption2)
-                        .foregroundColor(.white.opacity(0.8))
-
-                    HStack(spacing: 4) {
-                        Image(systemName: ellipse.angle > 0 ? "arrow.up.right" : "arrow.up.left")
-                            .font(.caption2)
-                            .foregroundColor(ellipse.angle > 0 ? LiquidGlassColors.accent : LiquidGlassColors.primary)
-
-                        Text(String(format: "%.1f°", abs(ellipse.angle)))
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .foregroundColor(.white)
-
-                        Text(ellipse.angle > 0 ? "rechts" : "links")
-                            .font(.caption2)
-                            .foregroundColor(ellipse.angle > 0 ? LiquidGlassColors.accent : LiquidGlassColors.primary)
-                    }
+                // Ellipse backward - immer sichtbar
+                Button(action: onPreviousEllipse) {
+                    Image(systemName: "chevron.left.2")
+                        .font(.title3)
+                        .foregroundColor(canGoPreviousEllipse() ? .white : .white.opacity(0.3))
+                        .frame(width: 38, height: 50)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.white.opacity(0.15))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(
-                                    LinearGradient(
-                                        colors: [
-                                            Color.white.opacity(0.4),
-                                            Color.white.opacity(0.15)
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    ),
-                                    lineWidth: 1.5
-                                )
+                .disabled(!canGoPreviousEllipse())
+
+                // Frame backward
+                Button(action: {
+                    onFrameStep(false)
+                }) {
+                    Image(systemName: "backward.frame")
+                        .font(.title3)
+                        .foregroundColor(.white)
+                        .frame(width: 44, height: 50)
+                }
+
+                // Play/Pause button
+                Button(action: {
+                    isPlaying.toggle()
+                }) {
+                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                        .font(.title2)
+                        .foregroundColor(.white)
+                        .frame(width: 50, height: 50)
+                        .background(
+                            Circle()
+                                .fill(LiquidGlassColors.primary)
                         )
-                        .shadow(color: LiquidGlassColors.accent.opacity(0.2), radius: 12, x: 0, y: 4)
-                )
-                .offset(y: -50)
+                        .overlay(
+                            Circle()
+                                .stroke(LiquidGlassColors.glassBorder, lineWidth: 1.5)
+                        )
+                        .shadow(color: LiquidGlassColors.primary.opacity(0.3), radius: 8, x: 0, y: 4)
+                }
+
+                // Frame forward
+                Button(action: {
+                    onFrameStep(true)
+                }) {
+                    Image(systemName: "forward.frame")
+                        .font(.title3)
+                        .foregroundColor(.white)
+                        .frame(width: 44, height: 50)
+                }
+
+                // Ellipse forward - immer sichtbar
+                Button(action: onNextEllipse) {
+                    Image(systemName: "chevron.right.2")
+                        .font(.title3)
+                        .foregroundColor(canGoNextEllipse() ? .white : .white.opacity(0.3))
+                        .frame(width: 38, height: 50)
+                }
+                .disabled(!canGoNextEllipse())
+
+                // Trajectory toggle (ganz rechts)
+                Button(action: {
+                    showTrajectory.toggle()
+                }) {
+                    Image(systemName: showTrajectory ? "eye" : "eye.slash")
+                        .font(.system(size: 16))
+                        .foregroundColor(showTrajectory ? LiquidGlassColors.accent : .white.opacity(0.7))
+                        .frame(width: 36, height: 36)
+                }
             }
+            .frame(height: 50)
         }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 16)
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(Color.white.opacity(0.12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.3),
+                                    Color.white.opacity(0.1)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1.5
+                        )
+                )
+                .shadow(color: Color.white.opacity(0.12), radius: 10, x: 0, y: 5)
+        )
     }
 
     private func seekWithSync(to time: Double) {
@@ -1232,10 +1334,8 @@ struct DualSpeedControl: View {
                                 let newSpeed = changeSpeedOneStep(currentSpeed: speed, direction: direction)
                                 onSpeedChange(newSpeed)
 
-                                // Update player rate
-                                if isPlaying {
-                                    player?.rate = newSpeed
-                                }
+                                // WICHTIG: Nicht player?.rate setzen - das startet das Video!
+                                // Das wird von onChange(of: playbackSpeed) gehandelt wenn Video spielt
 
                                 impactFeedback.impactOccurred()
 
@@ -1250,9 +1350,8 @@ struct DualSpeedControl: View {
                             if !hasTriggeredSwipe.wrappedValue && abs(verticalMovement) < 3 {
                                 // Tap resettet auf 1.0x
                                 onSpeedChange(1.0)
-                                if isPlaying {
-                                    player?.rate = 1.0
-                                }
+                                // WICHTIG: Nicht player?.rate setzen - das startet das Video!
+                                // Das wird von onChange(of: playbackSpeed) gehandelt wenn Video spielt
                                 impactFeedback.impactOccurred(intensity: 0.7)
                                 print("🔄 Tap: Speed reset to 1.0x")
                             }
