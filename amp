@@ -1,5 +1,44 @@
-Command line invocation:
-    /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -project HammerTrack.xcodeproj -scheme HammerTrack -destination "platform=iOS Simulator,name=iPhone 15" build 2
+2025-11-07 13:21:13.145 xcodebuild[22431:7327895] Writing error result bundle to /var/folders/98/tmk5ffw131sfw4th8byxr_800000gn/T/ResultBundle_2025-07-11_13-21-0013.xcresult
+2025-11-07 13:21:13.145 xcodebuild[22431:7327895] Writing error result bundle to /var/folders/98/tmk5ffw131sfw4th8byxr_800000gn/T/ResultBundle_2025-07-11_13-21-0013.xcresult
+xcodebuild: error: Unable to find a device matching the provided destination specifier:
+		{ platform:iOS Simulator, OS:latest, name:iPhone 16 Pro }
 
-2025-10-28 13:22:26.637 xcodebuild[88461:4027558] Writing error result bundle to /var/folders/98/tmk5ffw131sfw4th8byxr_800000gn/T/ResultBundle_2025-28-10_13-22-0026.xcresult
-xcodebuild: error: Unknown build action '2'.
+	The requested device could not be found because no available devices matched the request.
+
+	Available destinations for the "HammerTrack" scheme:
+		{ platform:macOS, arch:arm64, variant:Designed for [iPad,iPhone], id:00008112-001C60440A21401E, name:My Mac }
+		{ platform:iOS, arch:arm64, id:00008120-001859600C8BC01E, name:iPhone }
+		{ platform:iOS, id:dvtdevice-DVTiPhonePlaceholder-iphoneos:placeholder, name:Any iOS Device }
+		{ platform:iOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-iphonesimulator:placeholder, name:Any iOS Simulator Device }
+		{ platform:iOS Simulator, arch:arm64, id:A19CD7BC-8D20-43A3-BDBF-0E10C1F6459F, OS:26.0, name:iPad (A16) }
+		{ platform:iOS Simulator, arch:arm64, id:E1B10AF3-AB45-498C-95B5-2455E3E8CC43, OS:26.0, name:iPad Air 11-inch (M3) }
+		{ platform:iOS Simulator, arch:arm64, id:B608EC51-C90B-4B10-8CD1-67AF55CAF7FB, OS:26.0, name:iPad Air 13-inch (M3) }
+		{ platform:iOS Simulator, arch:arm64, id:47881C28-4CB8-4768-95AD-70832F2441BC, OS:26.0, name:iPad Pro 11-inch (M4) }
+		{ platform:iOS Simulator, arch:arm64, id:482E646D-E5E3-4EC3-81E9-BDC23604EDC2, OS:26.0, name:iPad Pro 13-inch (M4) }
+		{ platform:iOS Simulator, arch:arm64, id:E6B138DF-CFCC-4437-A4D0-77DEC7D75421, OS:26.0, name:iPad mini (A17 Pro) }
+		{ platform:iOS Simulator, arch:arm64, id:A1E7B792-49C1-4E79-9FAA-568C16B442C1, OS:26.0, name:iPhone 16e }
+		{ platform:iOS Simulator, arch:arm64, id:1D719245-0061-49E3-9D69-EC791F3C4AA2, OS:26.0, name:iPhone 17 }
+		{ platform:iOS Simulator, arch:arm64, id:F1C3C414-2228-44A9-A531-1BD3F2F5C787, OS:26.0, name:iPhone 17 Pro }
+		{ platform:iOS Simulator, arch:arm64, id:961B9003-53FE-4B43-B261-D61B77506027, OS:26.0, name:iPhone 17 Pro Max }
+		{ platform:iOS Simulator, arch:arm64, id:FDCD38BF-4E79-4380-9B66-237A920EC4BB, OS:26.0, name:iPhone Air }
+xcodebuild: error: Unable to find a device matching the provided destination specifier:
+		{ platform:iOS Simulator, OS:latest, name:iPhone 16 Pro }
+
+	The requested device could not be found because no available devices matched the request.
+
+	Available destinations for the "HammerTrack" scheme:
+		{ platform:macOS, arch:arm64, variant:Designed for [iPad,iPhone], id:00008112-001C60440A21401E, name:My Mac }
+		{ platform:iOS, arch:arm64, id:00008120-001859600C8BC01E, name:iPhone }
+		{ platform:iOS, id:dvtdevice-DVTiPhonePlaceholder-iphoneos:placeholder, name:Any iOS Device }
+		{ platform:iOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-iphonesimulator:placeholder, name:Any iOS Simulator Device }
+		{ platform:iOS Simulator, arch:arm64, id:A19CD7BC-8D20-43A3-BDBF-0E10C1F6459F, OS:26.0, name:iPad (A16) }
+		{ platform:iOS Simulator, arch:arm64, id:E1B10AF3-AB45-498C-95B5-2455E3E8CC43, OS:26.0, name:iPad Air 11-inch (M3) }
+		{ platform:iOS Simulator, arch:arm64, id:B608EC51-C90B-4B10-8CD1-67AF55CAF7FB, OS:26.0, name:iPad Air 13-inch (M3) }
+		{ platform:iOS Simulator, arch:arm64, id:47881C28-4CB8-4768-95AD-70832F2441BC, OS:26.0, name:iPad Pro 11-inch (M4) }
+		{ platform:iOS Simulator, arch:arm64, id:482E646D-E5E3-4EC3-81E9-BDC23604EDC2, OS:26.0, name:iPad Pro 13-inch (M4) }
+		{ platform:iOS Simulator, arch:arm64, id:E6B138DF-CFCC-4437-A4D0-77DEC7D75421, OS:26.0, name:iPad mini (A17 Pro) }
+		{ platform:iOS Simulator, arch:arm64, id:A1E7B792-49C1-4E79-9FAA-568C16B442C1, OS:26.0, name:iPhone 16e }
+		{ platform:iOS Simulator, arch:arm64, id:1D719245-0061-49E3-9D69-EC791F3C4AA2, OS:26.0, name:iPhone 17 }
+		{ platform:iOS Simulator, arch:arm64, id:F1C3C414-2228-44A9-A531-1BD3F2F5C787, OS:26.0, name:iPhone 17 Pro }
+		{ platform:iOS Simulator, arch:arm64, id:961B9003-53FE-4B43-B261-D61B77506027, OS:26.0, name:iPhone 17 Pro Max }
+		{ platform:iOS Simulator, arch:arm64, id:FDCD38BF-4E79-4380-9B66-237A920EC4BB, OS:26.0, name:iPhone Air }
