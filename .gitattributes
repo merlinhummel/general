@@ -1,0 +1,15 @@
+# Linguist overrides -- GitHub language stats
+*.html linguist-generated
+*.mlmodel linguist-vendored
+*.bin linguist-vendored
+weight.bin linguist-vendored
+
+# Line endings
+*.swift text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.plist text eol=lf
+
+# Binary
+*.png binary
+*.mlpackage binary
